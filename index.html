@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chemin Clair - Pratique bouddhiste tibetaine</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navigation principale">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">ཨོཾ</div>
+          <div>
+            <strong>Chemin Clair</strong>
+            <span>Pratique tibetaine</span>
+          </div>
+        </div>
+
+        <nav class="nav-list" id="navList"></nav>
+
+        <section class="daily-card">
+          <span class="eyebrow">Aujourd'hui</span>
+          <strong id="sidebarMinutes">0 min</strong>
+          <span id="sidebarStreak">Serie: 0 jours</span>
+        </section>
+      </aside>
+
+      <main>
+        <section class="hero">
+          <img src="./assets/hero-shrine.png" alt="Terrasse de meditation himalayenne au lever du jour" />
+          <div class="hero-content">
+            <span class="eyebrow">Tableau de bord</span>
+            <h1>Un compagnon calme pour une pratique reguliere.</h1>
+            <p>Planifiez vos sessions, comptez les mantras, tenez un journal, suivez votre progression et gardez vos textes essentiels au meme endroit.</p>
+            <div class="hero-actions">
+              <button class="primary-btn" data-view-link="timer">Demarrer une session</button>
+              <button class="ghost-btn" data-view-link="rituals">Voir les rituels</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-grid">
+          <div class="view-stack">
+            <section class="view is-active" id="dashboard"></section>
+            <section class="view" id="timer"></section>
+            <section class="view" id="mantras"></section>
+            <section class="view" id="rituals"></section>
+            <section class="view" id="journal"></section>
+            <section class="view" id="calendar"></section>
+            <section class="view" id="library"></section>
+            <section class="view" id="settings"></section>
+          </div>
+
+          <aside class="right-rail">
+            <section class="panel">
+              <div class="panel-head">
+                <span class="eyebrow">Intention</span>
+                <button class="icon-btn" id="newIntentionBtn" title="Nouvelle intention" aria-label="Nouvelle intention">+</button>
+              </div>
+              <p id="dailyIntention" class="intention-text"></p>
+            </section>
+
+            <section class="panel">
+              <span class="eyebrow">Progression</span>
+              <div class="ring-wrap">
+                <svg class="progress-ring" viewBox="0 0 120 120" role="img" aria-label="Progression de l'objectif quotidien">
+                  <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+                  <circle class="ring-value" id="goalRing" cx="60" cy="60" r="52"></circle>
+                </svg>
+                <div class="ring-copy">
+                  <strong id="goalPercent">0%</strong>
+                  <span>objectif</span>
+                </div>
+              </div>
+              <div class="compact-stats">
+                <span><strong id="weekMinutes">0</strong> min cette semaine</span>
+                <span><strong id="totalMantras">0</strong> mantras</span>
+              </div>
+            </section>
+
+            <section class="panel">
+              <span class="eyebrow">Rappel respectueux</span>
+              <p class="small-copy">Cette app soutient la regularite, mais ne remplace pas un enseignant qualifie ni une transmission authentique.</p>
+            </section>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="practiceDialog">
+      <form method="dialog" class="dialog-card">
+        <div class="panel-head">
+          <h2 id="dialogTitle">Ajouter</h2>
+          <button class="icon-btn" value="cancel" aria-label="Fermer">x</button>
+        </div>
+        <div id="dialogBody"></div>
+        <menu>
+          <button class="ghost-btn" value="cancel">Annuler</button>
+          <button class="primary-btn" id="dialogSave" value="default">Enregistrer</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
