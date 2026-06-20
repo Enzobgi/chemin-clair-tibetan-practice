@@ -1,6 +1,7 @@
 import {
   CURRENT_SCHEMA_VERSION,
   buildCalendarDays,
+  accumulationTotal,
   calculateStreak,
   elapsedTimerSeconds,
   localDateKey,
@@ -9,6 +10,8 @@ import {
   migrateState,
   removeWithUndo,
   remainingTimerSeconds,
+  routineDurationSeconds,
+  sessionsByDay,
   restoreLastDeleted,
   sessionDurationSeconds,
   sumSessionSeconds,
@@ -29,11 +32,14 @@ function clone(value) {
 const navItems = [
   ["dashboard", "Tableau", "⌂"],
   ["timer", "Meditation", "◷"],
+  ["routines", "Routines", "▶"],
   ["mantras", "Mantras", "108"],
+  ["accumulations", "Accumulations", "＋"],
   ["rituals", "Rituels", "☼"],
   ["journal", "Journal", "✎"],
   ["calendar", "Calendrier", "▦"],
   ["library", "Bibliotheque", "☷"],
+  ["stats", "Statistiques", "▥"],
   ["settings", "Reglages", "⚙"]
 ];
 
@@ -224,6 +230,7 @@ const seedState = {
     dailyGoal: 30,
     defaultTimer: 15,
     bell: true,
+    statsVisible: true,
     themeDensity: "comfortable"
   },
   intentions: [
@@ -235,7 +242,34 @@ const seedState = {
   sessions: [],
   journals: [],
   deletedItems: [],
-  routines: [],
+  routines: [
+    {
+      id: "routine-matin",
+      name: "Routine du matin",
+      description: "Ouvrir la journee avec une intention claire et une attention stable.",
+      days: [1, 2, 3, 4, 5, 6, 0],
+      time: "07:30",
+      archived: false,
+      steps: [
+        { id: "routine-matin-1", practiceTitle: "Refuge et bodhicitta", minutes: 5, optional: false },
+        { id: "routine-matin-2", practiceTitle: "Calme mental", minutes: 15, optional: false },
+        { id: "routine-matin-3", practiceTitle: "Dedication", minutes: 3, optional: false }
+      ]
+    },
+    {
+      id: "routine-soir",
+      name: "Routine du soir",
+      description: "Revenir sur la journee avec douceur et conclure sans precipitation.",
+      days: [1, 2, 3, 4, 5, 6, 0],
+      time: "21:00",
+      archived: false,
+      steps: [
+        { id: "routine-soir-1", practiceTitle: "Calme mental", minutes: 10, optional: false },
+        { id: "routine-soir-2", practiceTitle: "Tonglen", minutes: 8, optional: true },
+        { id: "routine-soir-3", practiceTitle: "Dedication", minutes: 4, optional: false }
+      ]
+    }
+  ],
   accumulations: [],
   calendarEvents: [],
   mantra: {
@@ -258,6 +292,10 @@ let timerInterval = null;
 let timer = loadTimerState();
 let toastTimer = null;
 let remoteRevision = 0;
+let focusSession = null;
+let focusInterval = null;
+let journalFilters = { query: "", type: "all", sort: "newest" };
+let statsPeriod = 30;
 
 const qs = (selector) => document.querySelector(selector);
 
@@ -481,6 +519,7 @@ function setView(view) {
 
 function renderNav() {
   qs("#navList").innerHTML = navItems
+    .filter(([id]) => id !== "stats" || state.settings.statsVisible !== false)
     .map(([id, label, icon]) => `
       <button class="nav-btn ${activeView === id ? "is-active" : ""}" data-view="${id}">
         <span class="nav-icon" aria-hidden="true">${icon}</span>
@@ -542,12 +581,29 @@ function renderAccountPanel() {
 
 function renderDashboard() {
   const todayMinutes = minutesFor(todayKey());
+  const todayDay = new Date().getDay();
+  const todayRoutine = state.routines.find((routine) => !routine.archived && (!routine.days?.length || routine.days.includes(todayDay)));
+  const activeAccumulation = state.accumulations.find((item) => !item.archived);
   qs("#dashboard").innerHTML = `
     <div class="metrics-grid">
       ${metric("Aujourd'hui", `${todayMinutes} min`, `${Math.max(0, state.settings.dailyGoal - todayMinutes)} min restantes`)}
       ${metric("Serie", `${streak()} jours`, "avec au moins une session")}
       ${metric("Semaine", `${weekMinutes()} min`, `${state.sessions.length} sessions au total`)}
       ${metric("Mantras", totalMantras(), `${state.mantra.selected}`)}
+    </div>
+    <div class="dashboard-actions">
+      <section class="panel">
+        <span class="eyebrow">Routine du jour</span>
+        <h2>${escapeHtml(todayRoutine?.name || "Aucune routine planifiee")}</h2>
+        <p>${todayRoutine ? `${formatDuration(routineDurationSeconds(todayRoutine))} · ${todayRoutine.steps.length} etapes` : "Choisissez librement une pratique ou creez une routine."}</p>
+        <button class="primary-btn" id="startTodayRoutine" ${todayRoutine ? "" : "disabled"}>Commencer ma routine</button>
+      </section>
+      <section class="panel">
+        <span class="eyebrow">Accumulation active</span>
+        <h2>${escapeHtml(activeAccumulation?.name || "Aucune accumulation")}</h2>
+        <p>${activeAccumulation ? `${accumulationTotal(activeAccumulation).toLocaleString("fr-FR")} sur ${Number(activeAccumulation.target || 0).toLocaleString("fr-FR")}` : "Vous pouvez creer un engagement personnel sans pression."}</p>
+        <button class="ghost-btn" data-view-link="accumulations">Ouvrir les accumulations</button>
+      </section>
     </div>
     <div class="two-col">
       <section class="panel">
@@ -572,6 +628,8 @@ function renderDashboard() {
     </div>
   `;
   qs("#quickSession").addEventListener("click", openSessionDialog);
+  qs("#startTodayRoutine").addEventListener("click", () => todayRoutine && startRoutine(todayRoutine));
+  qs('[data-view-link="accumulations"]').addEventListener("click", () => setView("accumulations"));
   bindPracticeButtons();
   bindJournalActions();
 }
@@ -603,6 +661,7 @@ function practiceRow(p, detailed = false) {
       </div>
       <div class="button-row">
         ${detailed ? `<button class="ghost-btn" data-view-practice="${p.id}">Rituel complet</button>` : ""}
+        ${detailed ? `<button class="primary-btn" data-guide-practice="${p.id}">Mode guide</button>` : ""}
         <button class="ghost-btn" data-start-practice="${p.id}">${p.minutes} min</button>
         <button class="primary-btn" data-log-practice="${p.id}">Valider</button>
         ${detailed ? `
@@ -839,6 +898,186 @@ function renderMantras() {
   });
 }
 
+function renderRoutines() {
+  const active = state.routines.filter((routine) => !routine.archived);
+  const archived = state.routines.filter((routine) => routine.archived);
+  qs("#routines").innerHTML = `
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Sequences personnelles</span>
+          <h2>Routines de pratique</h2>
+          <p class="muted">Assemblez plusieurs pratiques, ajustez leurs durees et lancez-les dans un espace calme.</p>
+        </div>
+        <button class="primary-btn" id="addRoutine">Nouvelle routine</button>
+      </div>
+      <div class="routine-grid">
+        ${active.map(routineCard).join("") || empty("Aucune routine active.")}
+      </div>
+      ${archived.length ? `
+        <details class="archived-section">
+          <summary>Routines archivees (${archived.length})</summary>
+          <div class="routine-grid">${archived.map(routineCard).join("")}</div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+  qs("#addRoutine").addEventListener("click", () => openRoutineDialog());
+  bindRoutineActions();
+}
+
+function routineCard(routine) {
+  const total = routineDurationSeconds(routine);
+  const dayNames = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  return `
+    <article class="routine-card">
+      <div class="row-head">
+        <div><h3>${escapeHtml(routine.name)}</h3><p>${escapeHtml(routine.description || "")}</p></div>
+        <span class="tag">${formatDuration(total)}</span>
+      </div>
+      <ol class="routine-steps">
+        ${(routine.steps || []).map((step, index) => `
+          <li>
+            <span>${index + 1}</span>
+            <div><strong>${escapeHtml(step.practiceTitle)}</strong><small>${step.minutes} min${step.optional ? " · facultative" : ""}</small></div>
+            <div class="step-actions">
+              <button class="icon-btn" data-routine-up="${routine.id}:${index}" aria-label="Monter l'etape" ${index === 0 ? "disabled" : ""}>↑</button>
+              <button class="icon-btn" data-routine-down="${routine.id}:${index}" aria-label="Descendre l'etape" ${index === routine.steps.length - 1 ? "disabled" : ""}>↓</button>
+            </div>
+          </li>
+        `).join("")}
+      </ol>
+      <p class="muted">${(routine.days || []).map((day) => dayNames[day]).join(" · ") || "Jours libres"}${routine.time ? ` · ${routine.time}` : ""}</p>
+      <div class="button-row">
+        <button class="primary-btn" data-start-routine="${routine.id}" ${routine.archived ? "disabled" : ""}>Commencer</button>
+        <button class="ghost-btn" data-edit-routine="${routine.id}">Modifier</button>
+        <button class="icon-btn" data-copy-routine="${routine.id}" aria-label="Dupliquer" title="Dupliquer">⧉</button>
+        <button class="icon-btn" data-archive-routine="${routine.id}" aria-label="${routine.archived ? "Restaurer" : "Archiver"}" title="${routine.archived ? "Restaurer" : "Archiver"}">${routine.archived ? "↥" : "⌄"}</button>
+        <button class="icon-btn danger-btn" data-delete-routine="${routine.id}" aria-label="Supprimer" title="Supprimer">×</button>
+      </div>
+    </article>
+  `;
+}
+
+function bindRoutineActions() {
+  document.querySelectorAll("[data-start-routine]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const routine = state.routines.find((item) => item.id === button.dataset.startRoutine);
+      if (routine) startRoutine(routine);
+    });
+  });
+  document.querySelectorAll("[data-edit-routine]").forEach((button) => {
+    button.addEventListener("click", () => openRoutineDialog(state.routines.find((item) => item.id === button.dataset.editRoutine)));
+  });
+  document.querySelectorAll("[data-copy-routine]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const source = state.routines.find((item) => item.id === button.dataset.copyRoutine);
+      if (!source) return;
+      state.routines.push(newRecord({
+        ...clone(source),
+        id: makeId(),
+        name: `${source.name} - copie`,
+        steps: source.steps.map((step) => newRecord({ ...step, id: makeId() })),
+        archived: false
+      }));
+      saveState();
+    });
+  });
+  document.querySelectorAll("[data-archive-routine]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const routine = state.routines.find((item) => item.id === button.dataset.archiveRoutine);
+      if (!routine) return;
+      routine.archived = !routine.archived;
+      markUpdated(routine);
+      saveState();
+    });
+  });
+  document.querySelectorAll("[data-delete-routine]").forEach((button) => {
+    button.addEventListener("click", () => softDelete("routines", button.dataset.deleteRoutine, "Supprimer cette routine ?"));
+  });
+  document.querySelectorAll("[data-routine-up], [data-routine-down]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const value = button.dataset.routineUp || button.dataset.routineDown;
+      const [routineId, indexText] = value.split(":");
+      const routine = state.routines.find((item) => item.id === routineId);
+      const index = Number(indexText);
+      const target = button.dataset.routineUp ? index - 1 : index + 1;
+      if (!routine || target < 0 || target >= routine.steps.length) return;
+      [routine.steps[index], routine.steps[target]] = [routine.steps[target], routine.steps[index]];
+      markUpdated(routine);
+      saveState();
+    });
+  });
+}
+
+function openRoutineDialog(routine = null) {
+  const lines = routine
+    ? routine.steps.map((step) => `${step.practiceTitle} | ${step.minutes} | ${step.optional ? "oui" : "non"}`).join("\n")
+    : "Refuge et bodhicitta | 5 | non\nCalme mental | 15 | non\nDedication | 3 | non";
+  const days = routine?.days || [1, 2, 3, 4, 5, 6, 0];
+  openDialog(routine ? "Modifier la routine" : "Nouvelle routine", `
+    <label>Nom <input id="routineName" value="${escapeAttr(routine?.name || "Ma routine")}" required></label>
+    <label>Description <textarea id="routineDescription">${escapeHtml(routine?.description || "Une sequence adaptee a mon rythme.")}</textarea></label>
+    <div class="form-grid">
+      <label>Heure indicative <input id="routineTime" type="time" value="${escapeAttr(routine?.time || "07:30")}"></label>
+      <fieldset class="day-picker">
+        <legend>Jours</legend>
+        ${[["L", 1], ["M", 2], ["M", 3], ["J", 4], ["V", 5], ["S", 6], ["D", 0]].map(([label, value]) => `
+          <label><input type="checkbox" name="routineDay" value="${value}" ${days.includes(value) ? "checked" : ""}>${label}</label>
+        `).join("")}
+      </fieldset>
+    </div>
+    <label>Etapes, une par ligne au format Pratique | minutes | facultative (oui/non)
+      <textarea id="routineSteps">${escapeHtml(lines)}</textarea>
+    </label>
+    <p class="muted">Les boutons haut et bas sur la fiche permettent ensuite de reorganiser rapidement les etapes.</p>
+  `, () => {
+    const steps = qs("#routineSteps").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [practiceTitle, minutes, optional] = line.split("|").map((part) => part.trim());
+      return newRecord({
+        practiceTitle: practiceTitle || "Pratique libre",
+        minutes: Math.max(1, Number(minutes || 5)),
+        optional: /^(oui|yes|true|1)$/i.test(optional || "")
+      });
+    });
+    const values = {
+      name: qs("#routineName").value.trim() || "Ma routine",
+      description: qs("#routineDescription").value.trim(),
+      time: qs("#routineTime").value,
+      days: [...document.querySelectorAll('input[name="routineDay"]:checked')].map((input) => Number(input.value)),
+      steps,
+      archived: routine?.archived || false
+    };
+    if (routine) {
+      Object.assign(routine, values);
+      markUpdated(routine);
+    } else {
+      state.routines.push(newRecord(values));
+    }
+    saveState();
+  });
+}
+
+function startRoutine(routine) {
+  if (!routine.steps?.length) {
+    showToast("Ajoutez au moins une etape avant de lancer cette routine.");
+    return;
+  }
+  const steps = routine.steps.map((step) => ({
+    ...step,
+    title: step.practiceTitle,
+    instruction: state.practices.find((practice) => practice.title === step.practiceTitle)?.notes || "Pratiquez avec attention, selon les instructions que vous avez recues.",
+    durationSeconds: Number(step.minutes || 1) * 60
+  }));
+  startFocusSession({
+    type: "routine",
+    sourceId: routine.id,
+    title: routine.name,
+    steps,
+    saveEachStep: true
+  });
+}
+
 function renderRituals() {
   const activePractices = state.practices.filter((practice) => !practice.archived);
   const archivedPractices = state.practices.filter((practice) => practice.archived);
@@ -895,6 +1134,12 @@ function bindPracticeButtons() {
     btn.addEventListener("click", () => {
       const practice = state.practices.find((item) => item.id === btn.dataset.viewPractice);
       if (practice) openRitualDetail(practice);
+    });
+  });
+  document.querySelectorAll("[data-guide-practice]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const practice = state.practices.find((item) => item.id === btn.dataset.guidePractice);
+      if (practice) startGuidedRitual(practice);
     });
   });
   document.querySelectorAll("[data-edit-practice]").forEach((btn) => {
@@ -972,21 +1217,440 @@ function openRitualDetail(practice) {
         <h3>Point d'attention</h3>
         <p>${escapeHtml(practice.caution)}</p>
       </section>
+      <button class="primary-btn" id="startGuidedRitual" type="button">Lancer le rituel guide</button>
     </article>
+  `);
+  qs("#startGuidedRitual").addEventListener("click", () => {
+    qs("#practiceDialog").close();
+    startGuidedRitual(practice);
+  });
+}
+
+function startGuidedRitual(practice) {
+  const rawSteps = practice.detailedSteps || [];
+  if (!rawSteps.length) {
+    showToast("Ajoutez des etapes detaillees avant de lancer le mode guide.");
+    return;
+  }
+  const fallbackMinutes = Math.max(1, Number(practice.minutes || 1) / Math.max(1, rawSteps.length));
+  const steps = rawSteps.map((step) => ({
+    ...step,
+    title: step.title,
+    instruction: step.instruction,
+    durationSeconds: parseDurationSeconds(step.duration) || Math.round(fallbackMinutes * 60)
+  }));
+  startFocusSession({
+    type: "ritual",
+    sourceId: practice.id,
+    title: practice.title,
+    warning: practice.caution,
+    steps,
+    saveEachStep: false
+  });
+}
+
+function parseDurationSeconds(value) {
+  const match = String(value || "").match(/(\d+(?:[.,]\d+)?)\s*(min|s)?/i);
+  if (!match) return 0;
+  const amount = Number(match[1].replace(",", "."));
+  return match[2]?.toLowerCase() === "s" ? amount : amount * 60;
+}
+
+async function startFocusSession(config) {
+  clearInterval(focusInterval);
+  focusSession = {
+    ...config,
+    index: 0,
+    running: true,
+    startedAt: Date.now(),
+    elapsedBeforeStart: 0,
+    completed: [],
+    fontScale: 1,
+    dim: false,
+    instructionsVisible: true
+  };
+  renderFocusMode();
+  startFocusTicker();
+  try {
+    focusSession.wakeLock = await navigator.wakeLock?.request("screen");
+  } catch {
+    // Le verrouillage d'ecran reste facultatif selon le navigateur.
+  }
+}
+
+function focusElapsedSeconds() {
+  if (!focusSession) return 0;
+  const running = focusSession.running && focusSession.startedAt
+    ? (Date.now() - focusSession.startedAt) / 1000
+    : 0;
+  return Math.max(0, Number(focusSession.elapsedBeforeStart || 0) + running);
+}
+
+function startFocusTicker() {
+  clearInterval(focusInterval);
+  if (!focusSession?.running) return;
+  focusInterval = setInterval(() => {
+    const step = focusSession.steps[focusSession.index];
+    if (focusElapsedSeconds() >= Number(step.durationSeconds || 0)) {
+      moveFocusStep(1, true);
+    } else {
+      updateFocusClock();
+    }
+  }, 500);
+}
+
+function renderFocusMode() {
+  if (!focusSession) return;
+  const host = qs("#focusMode");
+  const step = focusSession.steps[focusSession.index];
+  const progress = Math.round(((focusSession.index + Math.min(1, focusElapsedSeconds() / Math.max(1, step.durationSeconds))) / focusSession.steps.length) * 100);
+  host.hidden = false;
+  host.className = `focus-mode ${focusSession.dim ? "is-dim" : ""}`;
+  host.style.setProperty("--focus-font-scale", focusSession.fontScale);
+  host.innerHTML = `
+    <div class="focus-toolbar">
+      <button class="icon-btn focus-close" id="closeFocus" aria-label="Quitter">×</button>
+      <div class="focus-title"><span>${escapeHtml(focusSession.title)}</span><strong>Etape ${focusSession.index + 1} / ${focusSession.steps.length}</strong></div>
+      <div class="button-row">
+        <button class="icon-btn" id="focusTextSmaller" aria-label="Reduire le texte">A−</button>
+        <button class="icon-btn" id="focusTextLarger" aria-label="Agrandir le texte">A+</button>
+        <button class="icon-btn" id="focusDim" aria-label="Faible luminosite">◐</button>
+        <button class="icon-btn" id="focusInstructions" aria-label="Afficher ou masquer les instructions">☷</button>
+      </div>
+    </div>
+    <div class="focus-progress"><span style="width:${progress}%"></span></div>
+    <main class="focus-content">
+      <span class="eyebrow">${focusSession.type === "routine" ? "Routine" : "Rituel guide"}</span>
+      <h1>${escapeHtml(step.title)}</h1>
+      ${focusSession.instructionsVisible ? `<p class="focus-instruction">${escapeHtml(step.instruction || "")}</p>` : ""}
+      ${step.optional ? `<span class="tag">Etape facultative</span>` : ""}
+      ${focusSession.warning ? `<p class="focus-warning">${escapeHtml(focusSession.warning)}</p>` : ""}
+      <div class="focus-clock" id="focusClock">${formatTime(Math.max(0, step.durationSeconds - focusElapsedSeconds()))}</div>
+    </main>
+    <div class="focus-controls">
+      <button class="ghost-btn" id="focusPrevious" ${focusSession.index === 0 ? "disabled" : ""}>Precedent</button>
+      <button class="primary-btn" id="focusPause">${focusSession.running ? "Pause" : "Reprendre"}</button>
+      <button class="ghost-btn" id="focusNext">${focusSession.index === focusSession.steps.length - 1 ? "Terminer" : "Suivant"}</button>
+    </div>
+  `;
+  qs("#closeFocus").addEventListener("click", () => finishFocusSession(false));
+  qs("#focusPrevious").addEventListener("click", () => moveFocusStep(-1));
+  qs("#focusNext").addEventListener("click", () => moveFocusStep(1));
+  qs("#focusPause").addEventListener("click", toggleFocusPause);
+  qs("#focusTextSmaller").addEventListener("click", () => {
+    focusSession.fontScale = Math.max(0.85, focusSession.fontScale - 0.1);
+    renderFocusMode();
+  });
+  qs("#focusTextLarger").addEventListener("click", () => {
+    focusSession.fontScale = Math.min(1.5, focusSession.fontScale + 0.1);
+    renderFocusMode();
+  });
+  qs("#focusDim").addEventListener("click", () => {
+    focusSession.dim = !focusSession.dim;
+    renderFocusMode();
+  });
+  qs("#focusInstructions").addEventListener("click", () => {
+    focusSession.instructionsVisible = !focusSession.instructionsVisible;
+    renderFocusMode();
+  });
+}
+
+function updateFocusClock() {
+  const clock = qs("#focusClock");
+  if (!clock || !focusSession) return;
+  const step = focusSession.steps[focusSession.index];
+  clock.textContent = formatTime(Math.max(0, step.durationSeconds - focusElapsedSeconds()));
+}
+
+function toggleFocusPause() {
+  if (!focusSession) return;
+  if (focusSession.running) {
+    focusSession.elapsedBeforeStart = focusElapsedSeconds();
+    focusSession.startedAt = null;
+    focusSession.running = false;
+    clearInterval(focusInterval);
+  } else {
+    focusSession.startedAt = Date.now();
+    focusSession.running = true;
+    startFocusTicker();
+  }
+  renderFocusMode();
+}
+
+function moveFocusStep(direction, automatic = false) {
+  if (!focusSession) return;
+  const elapsed = Math.min(focusElapsedSeconds(), focusSession.steps[focusSession.index].durationSeconds);
+  focusSession.completed[focusSession.index] = Math.max(focusSession.completed[focusSession.index] || 0, elapsed);
+  const next = focusSession.index + direction;
+  if (next >= focusSession.steps.length) {
+    finishFocusSession(true);
+    return;
+  }
+  if (next < 0) return;
+  focusSession.index = next;
+  focusSession.elapsedBeforeStart = 0;
+  focusSession.startedAt = focusSession.running ? Date.now() : null;
+  if (automatic) ringBell();
+  renderFocusMode();
+}
+
+function finishFocusSession(save) {
+  clearInterval(focusInterval);
+  if (!focusSession) return;
+  const session = focusSession;
+  session.wakeLock?.release?.();
+  if (save) {
+    const currentElapsed = Math.min(focusElapsedSeconds(), session.steps[session.index]?.durationSeconds || 0);
+    session.completed[session.index] = Math.max(session.completed[session.index] || 0, currentElapsed);
+    const totalSeconds = session.completed.reduce((sum, seconds) => sum + Number(seconds || 0), 0);
+    if (session.saveEachStep) {
+      session.steps.forEach((step, index) => {
+        const durationSeconds = Math.round(session.completed[index] || 0);
+        if (!durationSeconds) return;
+        state.sessions.push(newRecord({
+          date: todayKey(),
+          label: step.title,
+          durationSeconds,
+          minutes: durationSeconds / 60,
+          mood: "routine",
+          routineId: session.sourceId
+        }));
+      });
+    }
+    state.sessions.push(newRecord({
+      date: todayKey(),
+      label: session.title,
+      durationSeconds: Math.round(totalSeconds),
+      minutes: totalSeconds / 60,
+      mood: session.type,
+      routineId: session.type === "routine" ? session.sourceId : null,
+      practiceId: session.type === "ritual" ? session.sourceId : null,
+      summaryOnly: session.saveEachStep
+    }));
+    saveState();
+    ringBell();
+  }
+  focusSession = null;
+  qs("#focusMode").hidden = true;
+  showToast(save ? "Pratique enregistree." : "Mode guide ferme.");
+}
+
+function renderAccumulations() {
+  const active = state.accumulations.filter((item) => !item.archived);
+  const archived = state.accumulations.filter((item) => item.archived);
+  qs("#accumulations").innerHTML = `
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Engagements personnels</span>
+          <h2>Accumulations</h2>
+          <p class="muted">Chaque ajout contribue a la continuite de votre pratique. Vous pouvez reprendre lorsque vous le souhaitez.</p>
+        </div>
+        <button class="primary-btn" id="addAccumulation">Nouvelle accumulation</button>
+      </div>
+      <div class="accumulation-grid">${active.map(accumulationCard).join("") || empty("Aucune accumulation active.")}</div>
+      ${archived.length ? `
+        <details class="archived-section">
+          <summary>Accumulations archivees (${archived.length})</summary>
+          <div class="accumulation-grid">${archived.map(accumulationCard).join("")}</div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+  qs("#addAccumulation").addEventListener("click", () => openAccumulationDialog());
+  bindAccumulationActions();
+}
+
+function accumulationCard(item) {
+  const current = accumulationTotal(item);
+  const target = Math.max(0, Number(item.target || 0));
+  const remaining = Math.max(0, target - current);
+  const percent = target ? Math.min(100, Math.round((current / target) * 100)) : 0;
+  const recent = sessionsByDay((item.entries || []).map((entry) => ({
+    date: entry.date,
+    durationSeconds: Number(entry.count || 0)
+  })), 7);
+  const weekTotal = recent.reduce((sum, day) => sum + day.seconds, 0);
+  return `
+    <article class="accumulation-card">
+      <div class="row-head">
+        <div><span class="tag">${escapeHtml(item.category || "Personnel")}</span><h3>${escapeHtml(item.name)}</h3></div>
+        <strong class="accumulation-total">${current.toLocaleString("fr-FR")}</strong>
+      </div>
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="${target || current || 1}" aria-valuenow="${current}">
+        <span style="width:${percent}%"></span>
+      </div>
+      <div class="accumulation-stats">
+        <span><strong>${remaining.toLocaleString("fr-FR")}</strong> restantes</span>
+        <span><strong>${percent}%</strong> de l'objectif</span>
+        <span><strong>${weekTotal.toLocaleString("fr-FR")}</strong> cette semaine</span>
+      </div>
+      ${item.dailyGoal ? `<p class="muted">Repere quotidien facultatif : ${item.dailyGoal.toLocaleString("fr-FR")}</p>` : ""}
+      <div class="quick-adds">
+        ${[1, 7, 21, 27, 54, 108].map((count) => `<button class="chip" data-add-accumulation="${item.id}:${count}">+${count}</button>`).join("")}
+        <button class="ghost-btn" data-custom-accumulation="${item.id}">Autre</button>
+      </div>
+      <div class="button-row">
+        <button class="ghost-btn" data-history-accumulation="${item.id}">Historique</button>
+        <button class="ghost-btn" data-edit-accumulation="${item.id}">Modifier</button>
+        <button class="icon-btn" data-archive-accumulation="${item.id}" aria-label="${item.archived ? "Restaurer" : "Archiver"}">${item.archived ? "↥" : "⌄"}</button>
+        <button class="icon-btn danger-btn" data-delete-accumulation="${item.id}" aria-label="Supprimer">×</button>
+      </div>
+    </article>
+  `;
+}
+
+function bindAccumulationActions() {
+  document.querySelectorAll("[data-add-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const [id, count] = button.dataset.addAccumulation.split(":");
+      addAccumulationEntry(id, Number(count));
+    });
+  });
+  document.querySelectorAll("[data-custom-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => openAccumulationEntryDialog(button.dataset.customAccumulation));
+  });
+  document.querySelectorAll("[data-history-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => openAccumulationHistory(state.accumulations.find((item) => item.id === button.dataset.historyAccumulation)));
+  });
+  document.querySelectorAll("[data-edit-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => openAccumulationDialog(state.accumulations.find((item) => item.id === button.dataset.editAccumulation)));
+  });
+  document.querySelectorAll("[data-archive-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = state.accumulations.find((entry) => entry.id === button.dataset.archiveAccumulation);
+      if (!item) return;
+      item.archived = !item.archived;
+      markUpdated(item);
+      saveState();
+    });
+  });
+  document.querySelectorAll("[data-delete-accumulation]").forEach((button) => {
+    button.addEventListener("click", () => softDelete("accumulations", button.dataset.deleteAccumulation, "Supprimer cette accumulation et son historique ?"));
+  });
+}
+
+function addAccumulationEntry(id, count, date = todayKey(), note = "") {
+  const item = state.accumulations.find((entry) => entry.id === id);
+  if (!item || !Number.isFinite(count) || count === 0) return;
+  item.entries.push(newRecord({ date, count, note }));
+  markUpdated(item);
+  saveState();
+  showToast("Progression enregistree.");
+}
+
+function openAccumulationEntryDialog(id) {
+  openDialog("Ajouter une valeur", `
+    <div class="form-grid">
+      <label>Nombre <input id="accumulationCount" type="number" value="108"></label>
+      <label>Date <input id="accumulationDate" type="date" value="${todayKey()}"></label>
+    </div>
+    <label>Note facultative <textarea id="accumulationEntryNote"></textarea></label>
+    <p class="muted">Une valeur negative permet de corriger une erreur de comptage.</p>
+  `, () => addAccumulationEntry(
+    id,
+    Number(qs("#accumulationCount").value),
+    qs("#accumulationDate").value,
+    qs("#accumulationEntryNote").value.trim()
+  ));
+}
+
+function openAccumulationDialog(item = null) {
+  openDialog(item ? "Modifier l'accumulation" : "Nouvelle accumulation", `
+    <label>Nom <input id="accumulationName" value="${escapeAttr(item?.name || "Mantra de Tchenrezig")}" required></label>
+    <div class="form-grid">
+      <label>Categorie <select id="accumulationCategory">
+        ${["Prosternations", "Refuge", "Vajrasattva", "Mandala", "Guru Yoga", "Mantra", "Personnel"].map((category) => `<option ${item?.category === category ? "selected" : ""}>${category}</option>`).join("")}
+      </select></label>
+      <label>Objectif total <input id="accumulationTarget" type="number" min="0" value="${item?.target || 100000}"></label>
+      <label>Repere quotidien facultatif <input id="accumulationDaily" type="number" min="0" value="${item?.dailyGoal || 108}"></label>
+      <label>Repetitions par cycle <input id="accumulationCycle" type="number" min="1" value="${item?.cycleSize || 108}"></label>
+      <label>Date de debut <input id="accumulationStart" type="date" value="${item?.startDate || todayKey()}"></label>
+      <label>Date cible facultative <input id="accumulationTargetDate" type="date" value="${item?.targetDate || ""}"></label>
+    </div>
+    <label>Notes <textarea id="accumulationNotes">${escapeHtml(item?.notes || "")}</textarea></label>
+  `, () => {
+    const values = {
+      name: qs("#accumulationName").value.trim() || "Accumulation",
+      category: qs("#accumulationCategory").value,
+      target: Math.max(0, Number(qs("#accumulationTarget").value)),
+      dailyGoal: Math.max(0, Number(qs("#accumulationDaily").value)),
+      cycleSize: Math.max(1, Number(qs("#accumulationCycle").value)),
+      startDate: qs("#accumulationStart").value,
+      targetDate: qs("#accumulationTargetDate").value,
+      notes: qs("#accumulationNotes").value.trim()
+    };
+    if (item) {
+      Object.assign(item, values);
+      markUpdated(item);
+    } else {
+      state.accumulations.push(newRecord({ ...values, archived: false, entries: [] }));
+    }
+    saveState();
+  });
+}
+
+function openAccumulationHistory(item) {
+  if (!item) return;
+  openInfoDialog(`Historique · ${item.name}`, `
+    <div class="day-detail-list">
+      ${(item.entries || []).slice().reverse().map((entry) => `
+        <article class="day-detail-item">
+          <div><strong>${Number(entry.count).toLocaleString("fr-FR")}</strong><p>${entry.date}${entry.note ? ` · ${escapeHtml(entry.note)}` : ""}</p></div>
+        </article>
+      `).join("") || empty("Aucune entree.")}
+    </div>
   `);
 }
 
 function renderJournal() {
+  const query = journalFilters.query.toLowerCase();
+  const filtered = state.journals
+    .filter((entry) => journalFilters.type === "all" || entry.type === journalFilters.type)
+    .filter((entry) => !query || [entry.title, entry.body, ...(entry.tags || [])].join(" ").toLowerCase().includes(query))
+    .sort((a, b) => journalFilters.sort === "oldest"
+      ? String(a.date).localeCompare(String(b.date))
+      : String(b.date).localeCompare(String(a.date)));
   qs("#journal").innerHTML = `
     <section class="panel">
       <div class="section-head">
         <div><span class="eyebrow">Integration</span><h2>Journal de pratique</h2></div>
-        <button class="primary-btn" id="addJournal">Nouvelle note</button>
+        <div class="button-row">
+          <button class="ghost-btn" id="weeklyReview">Revue hebdomadaire</button>
+          <button class="primary-btn" id="addJournal">Nouvelle note</button>
+        </div>
       </div>
-      <div class="journal-list">${state.journals.slice().reverse().map(journalCard).join("") || empty("Aucune note. Ajoutez une observation simple apres une session.")}</div>
+      <div class="filter-bar">
+        <label>Rechercher <input id="journalSearch" type="search" value="${escapeAttr(journalFilters.query)}" placeholder="Titre, contenu ou tag"></label>
+        <label>Type <select id="journalTypeFilter">
+          <option value="all">Tous</option>
+          <option value="quick" ${journalFilters.type === "quick" ? "selected" : ""}>Note rapide</option>
+          <option value="free" ${journalFilters.type === "free" ? "selected" : ""}>Journal libre</option>
+          <option value="weekly" ${journalFilters.type === "weekly" ? "selected" : ""}>Revue hebdomadaire</option>
+        </select></label>
+        <label>Tri <select id="journalSort">
+          <option value="newest">Plus recentes</option>
+          <option value="oldest" ${journalFilters.sort === "oldest" ? "selected" : ""}>Plus anciennes</option>
+        </select></label>
+      </div>
+      <div class="journal-list">${filtered.map(journalCard).join("") || empty("Aucune note ne correspond a ces filtres.")}</div>
     </section>
   `;
-  qs("#addJournal").addEventListener("click", openJournalDialog);
+  qs("#addJournal").addEventListener("click", () => openJournalDialog());
+  qs("#weeklyReview").addEventListener("click", openWeeklyReviewDialog);
+  qs("#journalSearch").addEventListener("input", (event) => {
+    journalFilters.query = event.target.value;
+    renderJournal();
+    qs("#journalSearch")?.focus();
+  });
+  qs("#journalTypeFilter").addEventListener("change", (event) => {
+    journalFilters.type = event.target.value;
+    renderJournal();
+  });
+  qs("#journalSort").addEventListener("change", (event) => {
+    journalFilters.sort = event.target.value;
+    renderJournal();
+  });
   bindJournalActions();
 }
 
@@ -994,13 +1658,15 @@ function journalCard(entry) {
   return `
     <article class="journal-entry panel">
       <div class="row-head">
-        <h3>${escapeHtml(entry.title)}</h3>
-        <span class="tag">${entry.date}</span>
+        <div><span class="eyebrow">${entry.type === "weekly" ? "Revue hebdomadaire" : entry.type === "free" ? "Journal libre" : "Note rapide"}</span><h3>${escapeHtml(entry.title)}</h3></div>
+        <button class="icon-btn" data-favorite-journal="${entry.id}" aria-label="${entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris"}">${entry.favorite ? "★" : "☆"}</button>
       </div>
+      <span class="tag">${entry.date}</span>
       <p>${escapeHtml(entry.body)}</p>
       <div class="tag-row">
         <span class="tag">${escapeHtml(entry.mood || "presence")}</span>
         <span class="tag">${entry.minutes || 0} min</span>
+        ${(entry.tags || []).map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
       </div>
       <div class="button-row">
         <button class="ghost-btn" data-edit-journal="${entry.id}">Modifier</button>
@@ -1182,6 +1848,106 @@ function openGuideDetail(guide) {
   `);
 }
 
+function renderStats() {
+  if (state.settings.statsVisible === false) {
+    qs("#stats").innerHTML = `<section class="panel">${empty("Les statistiques sont masquees dans les reglages.")}</section>`;
+    return;
+  }
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - statsPeriod + 1);
+  cutoff.setHours(0, 0, 0, 0);
+  const selectedPractice = qs("#statsPractice")?.value || "all";
+  const sessions = state.sessions.filter((session) => {
+    const inPeriod = new Date(`${session.date}T12:00:00`) >= cutoff;
+    const matches = selectedPractice === "all" || session.label === selectedPractice;
+    return inPeriod && matches && !session.summaryOnly;
+  });
+  const totalSeconds = sumSessionSeconds(sessions);
+  const average = sessions.length ? totalSeconds / sessions.length : 0;
+  const daily = sessionsByDay(sessions, Math.min(statsPeriod, 31));
+  const maxDaily = Math.max(1, ...daily.map((day) => day.seconds));
+  const byPractice = new Map();
+  sessions.forEach((session) => byPractice.set(session.label, (byPractice.get(session.label) || 0) + sessionDurationSeconds(session)));
+  const practiceRows = [...byPractice.entries()].sort((a, b) => b[1] - a[1]);
+  const maxPractice = Math.max(1, ...practiceRows.map(([, seconds]) => seconds));
+  const hours = new Map();
+  sessions.forEach((session) => {
+    const hour = session.createdAt ? new Date(session.createdAt).getHours() : null;
+    if (hour !== null && Number.isFinite(hour)) hours.set(hour, (hours.get(hour) || 0) + 1);
+  });
+  const commonHour = [...hours.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const obstacles = new Map();
+  state.journals.filter((entry) => new Date(`${entry.date}T12:00:00`) >= cutoff && entry.obstacle).forEach((entry) => {
+    obstacles.set(entry.obstacle, (obstacles.get(entry.obstacle) || 0) + 1);
+  });
+  const heatmap = sessionsByDay(state.sessions, 90);
+  qs("#stats").innerHTML = `
+    <section class="panel">
+      <div class="section-head">
+        <div><span class="eyebrow">Observation personnelle</span><h2>Statistiques de pratique</h2></div>
+        <div class="filter-bar compact-filter">
+          <label>Periode <select id="statsPeriod">
+            <option value="7" ${statsPeriod === 7 ? "selected" : ""}>7 jours</option>
+            <option value="30" ${statsPeriod === 30 ? "selected" : ""}>30 jours</option>
+            <option value="90" ${statsPeriod === 90 ? "selected" : ""}>90 jours</option>
+            <option value="365" ${statsPeriod === 365 ? "selected" : ""}>1 an</option>
+          </select></label>
+          <label>Pratique <select id="statsPractice">
+            <option value="all">Toutes</option>
+            ${[...new Set(state.sessions.map((session) => session.label))].sort().map((label) => `<option ${selectedPractice === label ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select></label>
+        </div>
+      </div>
+      <div class="metrics-grid">
+        ${metric("Temps", formatDuration(totalSeconds), `${statsPeriod} derniers jours`)}
+        ${metric("Sessions", sessions.length, "sans comparaison")}
+        ${metric("Duree moyenne", formatDuration(average), "par session")}
+        ${metric("Horaire frequent", commonHour === undefined ? "—" : `${String(commonHour).padStart(2, "0")} h`, "selon les sessions datees")}
+      </div>
+    </section>
+    <section class="panel">
+      <span class="eyebrow">Rythme quotidien</span>
+      <h2>Minutes par jour</h2>
+      <div class="bar-chart" aria-label="Minutes de pratique par jour">
+        ${daily.map((day) => `<div class="bar-column" title="${day.date} · ${formatDuration(day.seconds)}"><span style="height:${Math.max(3, Math.round((day.seconds / maxDaily) * 100))}%"></span><small>${day.date.slice(8)}</small></div>`).join("")}
+      </div>
+    </section>
+    <div class="two-col">
+      <section class="panel">
+        <span class="eyebrow">Repartition</span>
+        <h2>Par pratique</h2>
+        <div class="horizontal-bars">
+          ${practiceRows.map(([label, seconds]) => `<div><span>${escapeHtml(label)}</span><div><i style="width:${Math.round((seconds / maxPractice) * 100)}%"></i></div><strong>${formatDuration(seconds)}</strong></div>`).join("") || empty("Aucune session sur cette periode.")}
+        </div>
+      </section>
+      <section class="panel">
+        <span class="eyebrow">Accumulations</span>
+        <h2>Progression active</h2>
+        <div class="compact-list">
+          ${state.accumulations.filter((item) => !item.archived).map((item) => {
+            const total = accumulationTotal(item);
+            return `<div><span>${escapeHtml(item.name)}</span><strong>${total.toLocaleString("fr-FR")} / ${Number(item.target || 0).toLocaleString("fr-FR")}</strong></div>`;
+          }).join("") || empty("Aucune accumulation active.")}
+        </div>
+        <span class="eyebrow stats-subhead">Obstacles notes</span>
+        <div class="tag-row">${[...obstacles.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([label, count]) => `<span class="tag">${escapeHtml(label)} · ${count}</span>`).join("") || empty("Aucun obstacle renseigne.")}</div>
+      </section>
+    </div>
+    <section class="panel">
+      <span class="eyebrow">Vue sur 90 jours</span>
+      <h2>Continuite de la pratique</h2>
+      <div class="practice-heatmap" aria-label="Carte des jours pratiques">
+        ${heatmap.map((day) => `<span class="${day.seconds ? "has-practice" : ""}" title="${day.date} · ${formatDuration(day.seconds)}"></span>`).join("")}
+      </div>
+    </section>
+  `;
+  qs("#statsPeriod").addEventListener("change", (event) => {
+    statsPeriod = Number(event.target.value);
+    renderStats();
+  });
+  qs("#statsPractice").addEventListener("change", renderStats);
+}
+
 function renderSettings() {
   qs("#settings").innerHTML = `
     <section class="panel">
@@ -1192,6 +1958,7 @@ function renderSettings() {
           <label>Objectif quotidien en minutes <input id="dailyGoal" type="number" min="1" max="360" value="${state.settings.dailyGoal}"></label>
           <label>Duree par defaut <input id="defaultTimer" type="number" min="1" max="180" value="${state.settings.defaultTimer}"></label>
           <label>Cloche sonore <select id="bellSetting"><option value="true" ${state.settings.bell ? "selected" : ""}>Activee</option><option value="false" ${!state.settings.bell ? "selected" : ""}>Desactivee</option></select></label>
+          <label>Statistiques <select id="statsVisibility"><option value="true" ${state.settings.statsVisible !== false ? "selected" : ""}>Visibles</option><option value="false" ${state.settings.statsVisible === false ? "selected" : ""}>Masquees</option></select></label>
           <label>Sauvegarde complete <button class="ghost-btn" id="exportData" type="button">Telecharger JSON</button></label>
           <label>Restaurer une sauvegarde
             <button class="ghost-btn" id="importData" type="button">Importer JSON</button>
@@ -1212,10 +1979,12 @@ function renderSettings() {
     state.settings.dailyGoal = Number(qs("#dailyGoal").value);
     state.settings.defaultTimer = Number(qs("#defaultTimer").value);
     state.settings.bell = qs("#bellSetting").value === "true";
+    state.settings.statsVisible = qs("#statsVisibility").value === "true";
     clearTimerTicker();
     timer = createTimerState(state.settings.defaultTimer, timer.label);
     persistTimerState();
     saveState();
+    renderNav();
   });
   qs("#resetData").addEventListener("click", () => {
     if (confirm("Reinitialiser toutes les donnees de ce compte ?")) {
@@ -1326,18 +2095,42 @@ function openJournalDialog(entry = null) {
   openDialog(entry ? "Modifier la note" : "Nouvelle note", `
     <label>Titre <input id="journalTitle" value="${escapeAttr(entry?.title || "Apres la pratique")}" required></label>
     <div class="form-grid">
+      <label>Type <select id="journalType">
+        <option value="quick" ${entry?.type === "quick" || !entry ? "selected" : ""}>Note rapide</option>
+        <option value="free" ${entry?.type === "free" ? "selected" : ""}>Journal libre</option>
+        <option value="weekly" ${entry?.type === "weekly" ? "selected" : ""}>Revue hebdomadaire</option>
+      </select></label>
       <label>Date <input id="journalDate" type="date" value="${escapeAttr(entry?.date || todayKey())}"></label>
       <label>Minutes <input id="journalMinutes" type="number" min="0" value="${entry?.minutes ?? minutesFor(todayKey())}"></label>
       <label>Etat <input id="journalMood" value="${escapeAttr(entry?.mood || "presence")}"></label>
+      <label>Pratique associee <select id="journalPractice">
+        <option value="">Aucune</option>
+        ${state.practices.map((practice) => `<option value="${practice.id}" ${entry?.practiceId === practice.id ? "selected" : ""}>${escapeHtml(practice.title)}</option>`).join("")}
+      </select></label>
+      <label>Tags, separes par des virgules <input id="journalTags" value="${escapeAttr((entry?.tags || []).join(", "))}"></label>
+      <label>Qualite de presence <select id="journalPresence">
+        ${["non precisee", "fragile", "variable", "stable", "claire"].map((value) => `<option ${entry?.presence === value ? "selected" : ""}>${value}</option>`).join("")}
+      </select></label>
+      <label>Obstacle principal <input id="journalObstacle" value="${escapeAttr(entry?.obstacle || "")}"></label>
+      <label>Element aidant <input id="journalSupport" value="${escapeAttr(entry?.support || "")}"></label>
     </div>
     <label>Note <textarea id="journalBody">${escapeHtml(entry?.body || "Ce que je remarque aujourd'hui...")}</textarea></label>
+    <label>Intention pour la suite <textarea id="journalIntention">${escapeHtml(entry?.intention || "")}</textarea></label>
   `, () => {
     const values = {
       title: qs("#journalTitle").value,
+      type: qs("#journalType").value,
       date: qs("#journalDate").value,
       minutes: Number(qs("#journalMinutes").value),
       mood: qs("#journalMood").value,
-      body: qs("#journalBody").value
+      practiceId: qs("#journalPractice").value,
+      tags: qs("#journalTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
+      presence: qs("#journalPresence").value,
+      obstacle: qs("#journalObstacle").value.trim(),
+      support: qs("#journalSupport").value.trim(),
+      body: qs("#journalBody").value,
+      intention: qs("#journalIntention").value.trim(),
+      favorite: entry?.favorite || false
     };
     if (entry) {
       Object.assign(entry, values);
@@ -1346,6 +2139,42 @@ function openJournalDialog(entry = null) {
       const now = new Date().toISOString();
       state.journals.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
     }
+    saveState();
+  });
+}
+
+function openWeeklyReviewDialog() {
+  const weekSessions = state.sessions.filter((session) => new Date(`${session.date}T12:00:00`) >= weekStart());
+  const practiceTotals = new Map();
+  weekSessions.forEach((session) => practiceTotals.set(session.label, (practiceTotals.get(session.label) || 0) + sessionDurationSeconds(session)));
+  const mostRegular = [...practiceTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "Aucune pratique enregistree";
+  openDialog("Revue hebdomadaire", `
+    <p class="detail-callout">Cette semaine : ${formatDuration(sumSessionSeconds(weekSessions))} reparties sur ${weekSessions.length} sessions. Pratique la plus presente : ${escapeHtml(mostRegular)}.</p>
+    <label>Quel obstacle revient souvent ? <textarea id="reviewObstacle"></textarea></label>
+    <label>Qu'est-ce qui a soutenu la stabilite ? <textarea id="reviewSupport"></textarea></label>
+    <label>Quelle qualite souhaites-tu cultiver ? <textarea id="reviewQuality"></textarea></label>
+    <label>Quel ajustement simple envisages-tu ? <textarea id="reviewAdjustment"></textarea></label>
+  `, () => {
+    state.journals.push(newRecord({
+      type: "weekly",
+      title: `Revue de la semaine du ${weekStart().toLocaleDateString("fr-FR")}`,
+      date: todayKey(),
+      minutes: 0,
+      mood: "observation",
+      presence: "non precisee",
+      obstacle: qs("#reviewObstacle").value.trim(),
+      support: qs("#reviewSupport").value.trim(),
+      intention: qs("#reviewAdjustment").value.trim(),
+      tags: ["revue-hebdomadaire"],
+      favorite: false,
+      body: [
+        `Pratique la plus presente : ${mostRegular}.`,
+        `Obstacle : ${qs("#reviewObstacle").value.trim()}.`,
+        `Soutien : ${qs("#reviewSupport").value.trim()}.`,
+        `Qualite a cultiver : ${qs("#reviewQuality").value.trim()}.`,
+        `Ajustement : ${qs("#reviewAdjustment").value.trim()}.`
+      ].join("\n")
+    }));
     saveState();
   });
 }
@@ -1415,6 +2244,15 @@ function bindJournalActions() {
   document.querySelectorAll("[data-delete-journal]").forEach((button) => {
     button.addEventListener("click", () => softDelete("journals", button.dataset.deleteJournal, "Supprimer cette note ?"));
   });
+  document.querySelectorAll("[data-favorite-journal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = state.journals.find((item) => item.id === button.dataset.favoriteJournal);
+      if (!entry) return;
+      entry.favorite = !entry.favorite;
+      markUpdated(entry);
+      saveState();
+    });
+  });
 }
 
 function downloadFile(filename, content, type) {
@@ -1449,14 +2287,19 @@ function exportSessionsCsv() {
 function exportAccumulationsCsv() {
   const rows = [["type", "id", "date", "nom", "nombre", "objectif"]];
   state.mantra.history.forEach((entry) => rows.push(["mantra", entry.id, entry.date, entry.name, entry.count, ""]));
-  state.accumulations.forEach((entry) => rows.push([
-    "accumulation",
-    entry.id,
-    entry.date || entry.startDate || "",
-    entry.name || entry.title || "",
-    entry.count || entry.current || 0,
-    entry.target || entry.goal || ""
-  ]));
+  state.accumulations.forEach((item) => {
+    if (!item.entries?.length) {
+      rows.push(["accumulation", item.id, item.startDate || "", item.name || "", 0, item.target || ""]);
+    }
+    item.entries?.forEach((entry) => rows.push([
+      "accumulation",
+      entry.id,
+      entry.date || "",
+      item.name || "",
+      entry.count || 0,
+      item.target || ""
+    ]));
+  });
   downloadFile(`chemin-clair-accumulations-${todayKey()}.csv`, rows.map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv;charset=utf-8");
 }
 
@@ -1632,11 +2475,14 @@ function renderView() {
   const renderers = {
     dashboard: renderDashboard,
     timer: renderTimer,
+    routines: renderRoutines,
     mantras: renderMantras,
+    accumulations: renderAccumulations,
     rituals: renderRituals,
     journal: renderJournal,
     calendar: renderCalendar,
     library: renderLibrary,
+    stats: renderStats,
     settings: renderSettings
   };
   renderers[activeView]();

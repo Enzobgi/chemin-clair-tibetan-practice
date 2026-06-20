@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -44,6 +44,7 @@ export function buildCalendarDays(year, month, mondayFirst = true) {
 }
 
 export function sessionDurationSeconds(session) {
+  if (session.summaryOnly) return 0;
   if (Number.isFinite(Number(session.durationSeconds))) {
     return Math.max(0, Number(session.durationSeconds));
   }
@@ -64,6 +65,29 @@ export function calculateStreak(sessions, today = new Date()) {
     cursor.setDate(cursor.getDate() - 1);
   }
   return count;
+}
+
+export function routineDurationSeconds(routine) {
+  return (routine.steps || []).reduce((sum, step) => sum + Math.max(0, Number(step.minutes || 0) * 60), 0);
+}
+
+export function accumulationTotal(accumulation) {
+  return (accumulation.entries || []).reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+}
+
+export function sessionsByDay(sessions, days = 7, end = new Date()) {
+  const result = [];
+  const cursor = new Date(end);
+  cursor.setHours(12, 0, 0, 0);
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date(cursor);
+    date.setDate(cursor.getDate() - offset);
+    result.push({
+      date: localDateKey(date),
+      seconds: sumSessionSeconds(sessions, localDateKey(date))
+    });
+  }
+  return result;
 }
 
 function normalizeRecord(record, prefix, now) {
@@ -92,7 +116,12 @@ export function migrateState(input, defaults) {
         }, "session", now))
       : [],
     journals: Array.isArray(source.journals)
-      ? source.journals.map((entry) => normalizeRecord(entry, "journal", now))
+      ? source.journals.map((entry) => normalizeRecord({
+          type: entry.type || "quick",
+          tags: Array.isArray(entry.tags) ? entry.tags : [],
+          favorite: Boolean(entry.favorite),
+          ...entry
+        }, "journal", now))
       : [],
     practices: (Array.isArray(source.practices) ? source.practices : defaults.practices)
       .map((practice) => normalizeRecord({
@@ -100,8 +129,26 @@ export function migrateState(input, defaults) {
           archived: Boolean(practice.archived)
         }, "practice", now)),
     deletedItems: Array.isArray(source.deletedItems) ? source.deletedItems : [],
-    accumulations: Array.isArray(source.accumulations) ? source.accumulations : [],
-    routines: Array.isArray(source.routines) ? source.routines : [],
+    accumulations: Array.isArray(source.accumulations)
+      ? source.accumulations.map((item) => normalizeRecord({
+          ...item,
+          archived: Boolean(item.archived),
+          entries: Array.isArray(item.entries)
+            ? item.entries.map((entry) => normalizeRecord(entry, "accumulation-entry", now))
+            : []
+        }, "accumulation", now))
+      : [],
+    routines: (Array.isArray(source.routines) && (source.routines.length || Number(source.schemaVersion || 0) >= 3)
+      ? source.routines
+      : defaults.routines || [])
+      .map((routine) => normalizeRecord({
+          ...routine,
+          archived: Boolean(routine.archived),
+          days: Array.isArray(routine.days) ? routine.days : [],
+          steps: Array.isArray(routine.steps)
+            ? routine.steps.map((step) => normalizeRecord(step, "routine-step", now))
+            : []
+        }, "routine", now)),
     calendarEvents: Array.isArray(source.calendarEvents) ? source.calendarEvents : []
   };
   migrated.mantra.history = Array.isArray(migrated.mantra.history)
@@ -115,7 +162,7 @@ export function validateBackup(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { valid: false, errors: ["La racine doit etre un objet JSON."] };
   }
-  const arrayFields = ["sessions", "journals", "practices"];
+  const arrayFields = ["sessions", "journals", "practices", "routines", "accumulations"];
   for (const field of arrayFields) {
     if (value[field] !== undefined && !Array.isArray(value[field])) {
       errors.push(`Le champ ${field} doit etre une liste.`);

@@ -31,6 +31,11 @@
       "name": "Journal",
       "short_name": "Journal",
       "url": "./?view=journal"
+    },
+    {
+      "name": "Routine du jour",
+      "short_name": "Routine",
+      "url": "./?view=routines"
     }
   ]
 }

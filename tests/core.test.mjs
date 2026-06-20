@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   CURRENT_SCHEMA_VERSION,
+  accumulationTotal,
   buildCalendarDays,
   calculateStreak,
   elapsedTimerSeconds,
@@ -11,6 +12,8 @@ import {
   remainingTimerSeconds,
   removeWithUndo,
   restoreLastDeleted,
+  routineDurationSeconds,
+  sessionsByDay,
   sessionDurationSeconds,
   sumSessionSeconds,
   validateBackup
@@ -103,6 +106,39 @@ test("une suppression peut etre restauree a sa position", () => {
   assert.deepEqual(state.sessions.map((item) => item.id), ["b"]);
   restoreLastDeleted(state);
   assert.deepEqual(state.sessions.map((item) => item.id), ["a", "b"]);
+});
+
+test("les routines calculent la duree totale de leurs etapes", () => {
+  assert.equal(routineDurationSeconds({ steps: [{ minutes: 5 }, { minutes: 12 }, { minutes: 3 }] }), 1200);
+});
+
+test("les accumulations totalisent les corrections et les ajouts", () => {
+  assert.equal(accumulationTotal({ entries: [{ count: 108 }, { count: 21 }, { count: -1 }] }), 128);
+});
+
+test("les statistiques quotidiennes creent une serie continue de dates", () => {
+  const days = sessionsByDay([{ date: "2026-06-20", durationSeconds: 60 }], 3, new Date("2026-06-20T12:00:00"));
+  assert.deepEqual(days.map((day) => day.date), ["2026-06-18", "2026-06-19", "2026-06-20"]);
+  assert.equal(days[2].seconds, 60);
+});
+
+test("la migration version 3 normalise routines, accumulations et journal", () => {
+  const migrated = migrateState({
+    schemaVersion: 2,
+    sessions: [],
+    practices: [],
+    journals: [{ title: "Note", date: "2026-06-20", body: "Texte" }],
+    routines: [],
+    accumulations: [{ name: "Refuge", entries: [{ date: "2026-06-20", count: 7 }] }]
+  }, {
+    ...defaults,
+    routines: [{ id: "matin", name: "Matin", steps: [{ practiceTitle: "Calme", minutes: 5 }] }]
+  });
+  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.routines.length, 1);
+  assert.ok(migrated.routines[0].steps[0].id);
+  assert.ok(migrated.accumulations[0].entries[0].id);
+  assert.equal(migrated.journals[0].type, "quick");
 });
 
 test("le service worker exclut les API du cache", async () => {

@@ -58,11 +58,14 @@
           <div class="view-stack">
             <section class="view is-active" id="dashboard"></section>
             <section class="view" id="timer"></section>
+            <section class="view" id="routines"></section>
             <section class="view" id="mantras"></section>
+            <section class="view" id="accumulations"></section>
             <section class="view" id="rituals"></section>
             <section class="view" id="journal"></section>
             <section class="view" id="calendar"></section>
             <section class="view" id="library"></section>
+            <section class="view" id="stats"></section>
             <section class="view" id="settings"></section>
           </div>
 
@@ -145,6 +148,8 @@
       <span id="undoToastMessage">Element supprime.</span>
       <button class="text-btn" id="undoDeleteBtn" type="button">Annuler</button>
     </div>
+
+    <section class="focus-mode" id="focusMode" hidden aria-live="polite"></section>
 
     <script type="module" src="./app.js"></script>
   </body>

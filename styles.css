@@ -403,6 +403,332 @@ menu {
   gap: 18px;
 }
 
+.dashboard-actions,
+.routine-grid,
+.accumulation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.routine-card,
+.accumulation-card {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.routine-card p,
+.accumulation-card p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.routine-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.routine-steps li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.routine-steps li > span {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #efe3cd;
+  font-weight: 800;
+}
+
+.routine-steps small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+
+.step-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.step-actions .icon-btn {
+  width: 34px;
+  min-height: 34px;
+}
+
+.day-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.day-picker label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.day-picker input {
+  width: auto;
+}
+
+.accumulation-total {
+  font-size: 1.7rem;
+  color: var(--maroon);
+}
+
+.progress-bar {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eadfc9;
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--teal);
+}
+
+.accumulation-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.accumulation-stats span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.accumulation-stats strong {
+  display: block;
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.quick-adds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) repeat(2, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.compact-filter {
+  min-width: min(100%, 420px);
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  margin: 0;
+}
+
+.bar-chart {
+  height: 220px;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(12px, 1fr);
+  gap: 5px;
+  align-items: end;
+  overflow-x: auto;
+  padding-top: 14px;
+}
+
+.bar-column {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 1fr 22px;
+  align-items: end;
+  gap: 5px;
+  text-align: center;
+}
+
+.bar-column span {
+  min-height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--teal);
+}
+
+.bar-column small {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.horizontal-bars,
+.compact-list {
+  display: grid;
+  gap: 12px;
+}
+
+.horizontal-bars > div {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(90px, 2fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.horizontal-bars > div > div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eadfc9;
+}
+
+.horizontal-bars i {
+  display: block;
+  height: 100%;
+  background: var(--maroon);
+}
+
+.compact-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.stats-subhead {
+  margin-top: 24px;
+}
+
+.practice-heatmap {
+  display: grid;
+  grid-template-columns: repeat(30, minmax(8px, 1fr));
+  gap: 4px;
+}
+
+.practice-heatmap span {
+  aspect-ratio: 1;
+  border-radius: 2px;
+  background: #e7dfd2;
+}
+
+.practice-heatmap .has-practice {
+  background: var(--teal);
+}
+
+.focus-mode {
+  --focus-font-scale: 1;
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto 5px minmax(0, 1fr) auto;
+  min-height: 100dvh;
+  background: #f7f1e7;
+  color: #211f1c;
+}
+
+.focus-mode[hidden] {
+  display: none;
+}
+
+.focus-mode.is-dim {
+  background: #161411;
+  color: #eee5d7;
+}
+
+.focus-toolbar,
+.focus-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 20px;
+}
+
+.focus-mode.is-dim .icon-btn,
+.focus-mode.is-dim .ghost-btn {
+  border-color: #524a41;
+  background: #28231f;
+  color: #eee5d7;
+}
+
+.focus-title {
+  min-width: 0;
+  text-align: center;
+}
+
+.focus-title span,
+.focus-title strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.focus-progress {
+  background: #dfd3c1;
+}
+
+.focus-progress span {
+  display: block;
+  height: 100%;
+  background: var(--maroon);
+}
+
+.focus-content {
+  width: min(850px, 100%);
+  display: grid;
+  place-content: center;
+  gap: 22px;
+  margin: auto;
+  padding: 32px;
+  overflow-y: auto;
+  text-align: center;
+}
+
+.focus-content h1 {
+  margin: 0;
+  color: inherit;
+  font-size: calc(3rem * var(--focus-font-scale));
+  line-height: 1.08;
+}
+
+.focus-instruction {
+  max-width: 70ch;
+  margin: 0 auto;
+  font-size: calc(1.25rem * var(--focus-font-scale));
+  line-height: 1.75;
+}
+
+.focus-clock {
+  font-size: calc(3.4rem * var(--focus-font-scale));
+  font-weight: 900;
+}
+
+.focus-warning {
+  max-width: 65ch;
+  margin: 0 auto;
+  padding: 12px;
+  border: 1px solid #c9aa82;
+  border-radius: var(--radius);
+  color: inherit;
+  font-size: 0.9rem;
+}
+
 .practice-list,
 .journal-list,
 .library-grid,
@@ -428,6 +754,10 @@ menu {
 .journal-entry h3,
 .library-card h3 {
   margin-bottom: 4px;
+}
+
+.journal-entry > p {
+  white-space: pre-line;
 }
 
 .ritual-step-preview {
@@ -921,7 +1251,7 @@ menu {
   }
 
   .nav-list {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .daily-card {
@@ -958,10 +1288,17 @@ menu {
   .nav-list,
   .metrics-grid,
   .two-col,
+  .dashboard-actions,
+  .routine-grid,
+  .accumulation-grid,
   .form-grid,
   .library-grid,
   .right-rail {
     grid-template-columns: 1fr;
+  }
+
+  .nav-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .practice-row {
@@ -981,6 +1318,40 @@ menu {
 
   .day-detail-item {
     grid-template-columns: 1fr;
+  }
+
+  .filter-bar,
+  .compact-filter,
+  .accumulation-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .practice-heatmap {
+    grid-template-columns: repeat(15, minmax(8px, 1fr));
+  }
+
+  .focus-toolbar {
+    align-items: flex-start;
+  }
+
+  .focus-toolbar .button-row {
+    gap: 4px;
+  }
+
+  .focus-content {
+    padding: 22px;
+  }
+
+  .focus-content h1 {
+    font-size: calc(2.15rem * var(--focus-font-scale));
+  }
+
+  .focus-instruction {
+    font-size: calc(1.05rem * var(--focus-font-scale));
+  }
+
+  .focus-controls {
+    padding: 12px;
   }
 }
 
