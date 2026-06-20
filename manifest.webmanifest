@@ -36,6 +36,11 @@
       "name": "Routine du jour",
       "short_name": "Routine",
       "url": "./?view=routines"
+    },
+    {
+      "name": "Mode retraite",
+      "short_name": "Retraite",
+      "url": "./?view=retreats"
     }
   ]
 }

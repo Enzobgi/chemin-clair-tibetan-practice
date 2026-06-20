@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -149,7 +149,34 @@ export function migrateState(input, defaults) {
             ? routine.steps.map((step) => normalizeRecord(step, "routine-step", now))
             : []
         }, "routine", now)),
-    calendarEvents: Array.isArray(source.calendarEvents) ? source.calendarEvents : []
+    retreats: Array.isArray(source.retreats)
+      ? source.retreats.map((retreat) => normalizeRecord({
+          ...retreat,
+          archived: Boolean(retreat.archived),
+          days: Array.isArray(retreat.days) ? retreat.days : []
+        }, "retreat", now))
+      : [],
+    libraryItems: Array.isArray(source.libraryItems)
+      ? source.libraryItems.map((item) => normalizeRecord({
+          ...item,
+          favorite: Boolean(item.favorite),
+          private: item.private !== false,
+          tags: Array.isArray(item.tags) ? item.tags : []
+        }, "library", now))
+      : [],
+    audioItems: Array.isArray(source.audioItems)
+      ? source.audioItems.map((item) => normalizeRecord(item, "audio", now))
+      : [],
+    reminders: Array.isArray(source.reminders)
+      ? source.reminders.map((item) => normalizeRecord({
+          ...item,
+          enabled: Boolean(item.enabled),
+          days: Array.isArray(item.days) ? item.days : []
+        }, "reminder", now))
+      : [],
+    calendarEvents: Array.isArray(source.calendarEvents)
+      ? source.calendarEvents.map((item) => normalizeRecord(item, "calendar-event", now))
+      : []
   };
   migrated.mantra.history = Array.isArray(migrated.mantra.history)
     ? migrated.mantra.history.map((entry) => normalizeRecord(entry, "mantra", now))
@@ -162,7 +189,7 @@ export function validateBackup(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { valid: false, errors: ["La racine doit etre un objet JSON."] };
   }
-  const arrayFields = ["sessions", "journals", "practices", "routines", "accumulations"];
+  const arrayFields = ["sessions", "journals", "practices", "routines", "accumulations", "retreats", "libraryItems", "audioItems", "reminders", "calendarEvents"];
   for (const field of arrayFields) {
     if (value[field] !== undefined && !Array.isArray(value[field])) {
       errors.push(`Le champ ${field} doit etre une liste.`);
@@ -222,6 +249,10 @@ export function mergeImportedState(current, imported, defaults) {
     deletedItems: mergeById(current.deletedItems, normalized.deletedItems),
     accumulations: mergeById(current.accumulations, normalized.accumulations),
     routines: mergeById(current.routines, normalized.routines),
+    retreats: mergeById(current.retreats, normalized.retreats),
+    libraryItems: mergeById(current.libraryItems, normalized.libraryItems),
+    audioItems: mergeById(current.audioItems, normalized.audioItems),
+    reminders: mergeById(current.reminders, normalized.reminders),
     calendarEvents: mergeById(current.calendarEvents, normalized.calendarEvents)
   }, defaults);
 }

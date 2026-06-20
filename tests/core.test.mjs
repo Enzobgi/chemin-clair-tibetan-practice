@@ -122,7 +122,7 @@ test("les statistiques quotidiennes creent une serie continue de dates", () => {
   assert.equal(days[2].seconds, 60);
 });
 
-test("la migration version 3 normalise routines, accumulations et journal", () => {
+test("la migration intermediaire normalise routines, accumulations et journal", () => {
   const migrated = migrateState({
     schemaVersion: 2,
     sessions: [],
@@ -134,11 +134,39 @@ test("la migration version 3 normalise routines, accumulations et journal", () =
     ...defaults,
     routines: [{ id: "matin", name: "Matin", steps: [{ practiceTitle: "Calme", minutes: 5 }] }]
   });
-  assert.equal(migrated.schemaVersion, 3);
+  assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.equal(migrated.routines.length, 1);
   assert.ok(migrated.routines[0].steps[0].id);
   assert.ok(migrated.accumulations[0].entries[0].id);
   assert.equal(migrated.journals[0].type, "quick");
+});
+
+test("la migration version 4 preserve les espaces personnels", () => {
+  const migrated = migrateState({
+    schemaVersion: 3,
+    sessions: [],
+    practices: [],
+    journals: [],
+    routines: [],
+    accumulations: [],
+    retreats: [{ name: "Retraite", days: [{ date: "2026-06-20", completed: [0] }] }],
+    libraryItems: [{ title: "Texte recu", status: "transmission recue" }],
+    audioItems: [{ title: "Recitation locale" }],
+    reminders: [{ title: "Matin", days: [1], enabled: true }],
+    calendarEvents: [{ name: "Evenement source", date: "2026-06-20" }]
+  }, {
+    ...defaults,
+    retreats: [],
+    libraryItems: [],
+    audioItems: [],
+    reminders: []
+  });
+  assert.equal(migrated.schemaVersion, 4);
+  assert.equal(migrated.retreats[0].days[0].date, "2026-06-20");
+  assert.equal(migrated.libraryItems[0].private, true);
+  assert.equal(migrated.audioItems[0].title, "Recitation locale");
+  assert.equal(migrated.reminders[0].enabled, true);
+  assert.ok(migrated.calendarEvents[0].id);
 });
 
 test("le service worker exclut les API du cache", async () => {

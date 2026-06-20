@@ -38,7 +38,11 @@ const navItems = [
   ["rituals", "Rituels", "☼"],
   ["journal", "Journal", "✎"],
   ["calendar", "Calendrier", "▦"],
+  ["tibetanCalendar", "Calendrier tibetain", "◑"],
+  ["retreats", "Retraite", "◇"],
   ["library", "Bibliotheque", "☷"],
+  ["audio", "Audio", "♪"],
+  ["reminders", "Rappels", "◉"],
   ["stats", "Statistiques", "▥"],
   ["settings", "Reglages", "⚙"]
 ];
@@ -231,6 +235,8 @@ const seedState = {
     defaultTimer: 15,
     bell: true,
     statsVisible: true,
+    tibetanCalendarProfile: "personnalise",
+    remindersPaused: false,
     themeDensity: "comfortable"
   },
   intentions: [
@@ -271,6 +277,10 @@ const seedState = {
     }
   ],
   accumulations: [],
+  retreats: [],
+  libraryItems: [],
+  audioItems: [],
+  reminders: [],
   calendarEvents: [],
   mantra: {
     selected: "Om Mani Padme Hum",
@@ -296,6 +306,8 @@ let focusSession = null;
 let focusInterval = null;
 let journalFilters = { query: "", type: "all", sort: "newest" };
 let statsPeriod = 30;
+let activeAudioUrl = null;
+let reminderInterval = null;
 
 const qs = (selector) => document.querySelector(selector);
 
@@ -584,6 +596,8 @@ function renderDashboard() {
   const todayDay = new Date().getDay();
   const todayRoutine = state.routines.find((routine) => !routine.archived && (!routine.days?.length || routine.days.includes(todayDay)));
   const activeAccumulation = state.accumulations.find((item) => !item.archived);
+  const todayEvent = state.calendarEvents.find((event) => event.date === todayKey());
+  const activeRetreat = state.retreats.find((retreat) => !retreat.archived && retreat.startDate <= todayKey() && retreat.endDate >= todayKey());
   qs("#dashboard").innerHTML = `
     <div class="metrics-grid">
       ${metric("Aujourd'hui", `${todayMinutes} min`, `${Math.max(0, state.settings.dailyGoal - todayMinutes)} min restantes`)}
@@ -603,6 +617,18 @@ function renderDashboard() {
         <h2>${escapeHtml(activeAccumulation?.name || "Aucune accumulation")}</h2>
         <p>${activeAccumulation ? `${accumulationTotal(activeAccumulation).toLocaleString("fr-FR")} sur ${Number(activeAccumulation.target || 0).toLocaleString("fr-FR")}` : "Vous pouvez creer un engagement personnel sans pression."}</p>
         <button class="ghost-btn" data-view-link="accumulations">Ouvrir les accumulations</button>
+      </section>
+      <section class="panel">
+        <span class="eyebrow">Calendrier tibetain</span>
+        <h2>${escapeHtml(todayEvent?.name || "Aucun evenement ajoute")}</h2>
+        <p>${escapeHtml(todayEvent?.explanation || "Les dates affichees proviennent uniquement de vos sources.")}</p>
+        <button class="ghost-btn" data-view-link="tibetanCalendar">Ouvrir le calendrier</button>
+      </section>
+      <section class="panel">
+        <span class="eyebrow">Retraite</span>
+        <h2>${escapeHtml(activeRetreat?.name || "Aucune retraite en cours")}</h2>
+        <p>${escapeHtml(activeRetreat?.intention || "Vous pouvez preparer un programme de retraite personnel.")}</p>
+        <button class="ghost-btn" data-view-link="retreats">Ouvrir le mode retraite</button>
       </section>
     </div>
     <div class="two-col">
@@ -630,6 +656,8 @@ function renderDashboard() {
   qs("#quickSession").addEventListener("click", openSessionDialog);
   qs("#startTodayRoutine").addEventListener("click", () => todayRoutine && startRoutine(todayRoutine));
   qs('[data-view-link="accumulations"]').addEventListener("click", () => setView("accumulations"));
+  qs('[data-view-link="tibetanCalendar"]').addEventListener("click", () => setView("tibetanCalendar"));
+  qs('[data-view-link="retreats"]').addEventListener("click", () => setView("retreats"));
   bindPracticeButtons();
   bindJournalActions();
 }
@@ -1791,10 +1819,144 @@ function openDayDetail(date) {
   });
 }
 
+function renderRetreats() {
+  const active = state.retreats.filter((item) => !item.archived);
+  qs("#retreats").innerHTML = `
+    <section class="panel">
+      <div class="section-head">
+        <div><span class="eyebrow">Mode retraite</span><h2>Retraites personnelles</h2><p class="muted">Un espace simplifie, sans pression liee aux series.</p></div>
+        <button class="primary-btn" id="addRetreat">Nouvelle retraite</button>
+      </div>
+      <div class="retreat-grid">${active.map(retreatCard).join("") || empty("Aucune retraite configuree.")}</div>
+    </section>
+  `;
+  qs("#addRetreat").addEventListener("click", () => openRetreatDialog());
+  bindRetreatActions();
+}
+
+function retreatCard(retreat) {
+  const today = retreat.days.find((day) => day.date === todayKey()) || { completed: [], note: "" };
+  const completed = today.completed?.length || 0;
+  return `
+    <article class="retreat-card">
+      <div class="row-head"><div><span class="tag">${escapeHtml(retreat.type || "Retraite personnelle")}</span><h3>${escapeHtml(retreat.name)}</h3></div><span class="tag">${retreat.startDate} → ${retreat.endDate}</span></div>
+      <p>${escapeHtml(retreat.intention || "")}</p>
+      <p class="muted">${escapeHtml(retreat.location || "Lieu non precise")}${retreat.teacher ? ` · ${escapeHtml(retreat.teacher)}` : ""}</p>
+      <div class="progress-bar"><span style="width:${Math.min(100, Math.round((completed / Math.max(1, retreat.schedule.length)) * 100))}%"></span></div>
+      <p>${completed} étape${completed > 1 ? "s" : ""} accomplie${completed > 1 ? "s" : ""} aujourd'hui sur ${retreat.schedule.length}</p>
+      <div class="button-row">
+        <button class="primary-btn" data-open-retreat="${retreat.id}">Ouvrir le mode retraite</button>
+        <button class="ghost-btn" data-edit-retreat="${retreat.id}">Modifier</button>
+        <button class="ghost-btn" data-export-retreat="${retreat.id}">Exporter</button>
+        <button class="icon-btn danger-btn" data-delete-retreat="${retreat.id}" aria-label="Supprimer">×</button>
+      </div>
+    </article>
+  `;
+}
+
+function bindRetreatActions() {
+  document.querySelectorAll("[data-open-retreat]").forEach((button) => button.addEventListener("click", () => openRetreatMode(state.retreats.find((item) => item.id === button.dataset.openRetreat))));
+  document.querySelectorAll("[data-edit-retreat]").forEach((button) => button.addEventListener("click", () => openRetreatDialog(state.retreats.find((item) => item.id === button.dataset.editRetreat))));
+  document.querySelectorAll("[data-export-retreat]").forEach((button) => button.addEventListener("click", () => exportRetreat(state.retreats.find((item) => item.id === button.dataset.exportRetreat))));
+  document.querySelectorAll("[data-delete-retreat]").forEach((button) => button.addEventListener("click", () => softDelete("retreats", button.dataset.deleteRetreat, "Supprimer cette retraite et ses notes ?")));
+}
+
+function openRetreatDialog(retreat = null) {
+  const schedule = retreat?.schedule?.join("\n") || "Session du matin\nEtude\nKarma yoga\nSession de l'apres-midi\nDedication";
+  openDialog(retreat ? "Modifier la retraite" : "Nouvelle retraite", `
+    <label>Nom <input id="retreatName" value="${escapeAttr(retreat?.name || "Retraite personnelle")}" required></label>
+    <div class="form-grid">
+      <label>Lieu <input id="retreatLocation" value="${escapeAttr(retreat?.location || "")}"></label>
+      <label>Type <input id="retreatType" value="${escapeAttr(retreat?.type || "Retraite personnelle")}"></label>
+      <label>Debut <input id="retreatStart" type="date" value="${retreat?.startDate || todayKey()}"></label>
+      <label>Fin <input id="retreatEnd" type="date" value="${retreat?.endDate || todayKey()}"></label>
+      <label>Enseignant ou centre <input id="retreatTeacher" value="${escapeAttr(retreat?.teacher || "")}"></label>
+      <label>Objectif de recitation <input id="retreatRecitation" type="number" min="0" value="${retreat?.recitationGoal || 0}"></label>
+    </div>
+    <label>Intention <textarea id="retreatIntention">${escapeHtml(retreat?.intention || "")}</textarea></label>
+    <label>Programme quotidien, une etape par ligne <textarea id="retreatSchedule">${escapeHtml(schedule)}</textarea></label>
+    <label>Periodes de silence <input id="retreatSilence" value="${escapeAttr(retreat?.silence || "")}" placeholder="Ex. 21h00 - 09h00"></label>
+  `, () => {
+    const values = {
+      name: qs("#retreatName").value.trim(),
+      location: qs("#retreatLocation").value.trim(),
+      type: qs("#retreatType").value.trim(),
+      startDate: qs("#retreatStart").value,
+      endDate: qs("#retreatEnd").value,
+      teacher: qs("#retreatTeacher").value.trim(),
+      recitationGoal: Number(qs("#retreatRecitation").value || 0),
+      intention: qs("#retreatIntention").value.trim(),
+      schedule: qs("#retreatSchedule").value.split("\n").map((line) => line.trim()).filter(Boolean),
+      silence: qs("#retreatSilence").value.trim()
+    };
+    if (retreat) {
+      Object.assign(retreat, values);
+      markUpdated(retreat);
+    } else {
+      state.retreats.push(newRecord({ ...values, archived: false, days: [] }));
+    }
+    saveState();
+  });
+}
+
+function openRetreatMode(retreat) {
+  if (!retreat) return;
+  let day = retreat.days.find((item) => item.date === todayKey());
+  if (!day) {
+    day = newRecord({ date: todayKey(), completed: [], note: "", sleep: "", energy: "", generalState: "" });
+    retreat.days.push(day);
+  }
+  openInfoDialog(retreat.name, `
+    <article class="retreat-mode">
+      <span class="eyebrow">${todayKey()}</span>
+      <h3>${escapeHtml(retreat.intention || "Pratiquer avec simplicite et regularite.")}</h3>
+      ${retreat.silence ? `<p class="detail-callout">Silence : ${escapeHtml(retreat.silence)}</p>` : ""}
+      <div class="retreat-checklist">
+        ${retreat.schedule.map((step, index) => `<label><input type="checkbox" data-retreat-step="${index}" ${day.completed.includes(index) ? "checked" : ""}><span>${escapeHtml(step)}</span></label>`).join("")}
+      </div>
+      <div class="form-grid">
+        <label>Sommeil <input id="retreatSleep" value="${escapeAttr(day.sleep || "")}"></label>
+        <label>Energie <input id="retreatEnergy" value="${escapeAttr(day.energy || "")}"></label>
+        <label>Etat general <input id="retreatState" value="${escapeAttr(day.generalState || "")}"></label>
+      </div>
+      <label>Notes du jour <textarea id="retreatNote">${escapeHtml(day.note || "")}</textarea></label>
+      <button class="primary-btn" id="saveRetreatDay">Enregistrer la journee</button>
+    </article>
+  `);
+  qs("#saveRetreatDay").addEventListener("click", () => {
+    day.completed = [...document.querySelectorAll("[data-retreat-step]:checked")].map((input) => Number(input.dataset.retreatStep));
+    day.sleep = qs("#retreatSleep").value.trim();
+    day.energy = qs("#retreatEnergy").value.trim();
+    day.generalState = qs("#retreatState").value.trim();
+    day.note = qs("#retreatNote").value.trim();
+    markUpdated(day);
+    markUpdated(retreat);
+    qs("#practiceDialog").close();
+    saveState();
+    showToast("Journee de retraite enregistree.");
+  });
+}
+
+function exportRetreat(retreat) {
+  if (!retreat) return;
+  const content = [`# ${retreat.name}`, "", `Du ${retreat.startDate} au ${retreat.endDate}`, `Intention : ${retreat.intention || ""}`, ""];
+  retreat.days.forEach((day) => {
+    content.push(`## ${day.date}`, `Etapes accomplies : ${(day.completed || []).length}/${retreat.schedule.length}`, `Sommeil : ${day.sleep || ""}`, `Energie : ${day.energy || ""}`, `Etat general : ${day.generalState || ""}`, day.note || "", "");
+  });
+  downloadFile(`retraite-${retreat.name.toLowerCase().replaceAll(" ", "-")}.md`, content.join("\n"), "text/markdown;charset=utf-8");
+}
+
 function renderLibrary() {
   qs("#library").innerHTML = `
     <section class="panel">
-      <span class="eyebrow">Bibliotheque</span>
+      <div class="section-head"><div><span class="eyebrow">Bibliotheque</span><h2>Espace personnel</h2></div><button class="primary-btn" id="addLibraryItem">Ajouter</button></div>
+      <p class="muted">Les contenus personnels sont prives par defaut et ne sont jamais publies automatiquement.</p>
+      <div class="library-grid">
+        ${state.libraryItems.map(personalLibraryCard).join("") || empty("Aucun document personnel.")}
+      </div>
+    </section>
+    <section class="panel">
+      <span class="eyebrow">Guides publics</span>
       <h2>Guides de pratique</h2>
       <p class="muted">Ouvrez un guide pour consulter ses explications, sa mise en pratique et ses points d'attention.</p>
       <div class="library-grid">
@@ -1811,12 +1973,84 @@ function renderLibrary() {
       </div>
     </section>
   `;
+  qs("#addLibraryItem").addEventListener("click", () => openLibraryItemDialog());
+  document.querySelectorAll("[data-edit-library]").forEach((button) => button.addEventListener("click", () => openLibraryItemDialog(state.libraryItems.find((item) => item.id === button.dataset.editLibrary))));
+  document.querySelectorAll("[data-delete-library]").forEach((button) => button.addEventListener("click", () => softDelete("libraryItems", button.dataset.deleteLibrary, "Supprimer cet element personnel ?")));
+  document.querySelectorAll("[data-favorite-library]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.libraryItems.find((entry) => entry.id === button.dataset.favoriteLibrary);
+    if (!item) return;
+    item.favorite = !item.favorite;
+    markUpdated(item);
+    saveState();
+  }));
   document.querySelectorAll("[data-guide-id]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       const guide = libraryItems.find((item) => item.id === link.dataset.guideId);
       if (guide) openGuideDetail(guide);
     });
+  });
+}
+
+function personalLibraryCard(item) {
+  return `
+    <article class="library-card">
+      <div class="row-head"><span class="tag">${escapeHtml(item.folder || "Personnel")}</span><button class="icon-btn" data-favorite-library="${item.id}" aria-label="Favori">${item.favorite ? "★" : "☆"}</button></div>
+      <h3>${escapeHtml(item.title)}</h3>
+      <p>${escapeHtml(item.description || "")}</p>
+      <div class="tag-row"><span class="tag">${escapeHtml(item.type || "Note")}</span><span class="tag">${escapeHtml(item.status || "prive personnel")}</span>${item.lineage ? `<span class="tag">${escapeHtml(item.lineage)}</span>` : ""}</div>
+      ${safeExternalUrl(item.source) ? `<a class="library-link" href="${escapeAttr(safeExternalUrl(item.source))}" target="_blank" rel="noopener">Ouvrir la source</a>` : ""}
+      <div class="button-row"><button class="ghost-btn" data-edit-library="${item.id}">Modifier</button><button class="ghost-btn danger-btn" data-delete-library="${item.id}">Supprimer</button></div>
+    </article>
+  `;
+}
+
+function openLibraryItemDialog(item = null) {
+  openDialog(item ? "Modifier l'element" : "Ajouter a la bibliotheque", `
+    <label>Titre <input id="libraryTitle" value="${escapeAttr(item?.title || "")}" required></label>
+    <div class="form-grid">
+      <label>Type <select id="libraryType">${["Note", "Texte", "Priere", "Lien", "PDF", "Audio", "Image", "Document"].map((type) => `<option ${item?.type === type ? "selected" : ""}>${type}</option>`).join("")}</select></label>
+      <label>Dossier <select id="libraryFolder">${["Pratiques quotidiennes", "Enseignements publics", "Textes recus", "Etude", "Retraite", "Prieres", "Personnel"].map((folder) => `<option ${item?.folder === folder ? "selected" : ""}>${folder}</option>`).join("")}</select></label>
+      <label>Auteur ou maitre <input id="libraryAuthor" value="${escapeAttr(item?.author || "")}"></label>
+      <label>Lignee <input id="libraryLineage" value="${escapeAttr(item?.lineage || "")}"></label>
+      <label>Langue <input id="libraryLanguage" value="${escapeAttr(item?.language || "francais")}"></label>
+      <label>Statut <select id="libraryStatus">${["public", "enseignement general", "instruction recommandee", "transmission recue", "initiation requise", "contenu prive personnel"].map((status) => `<option ${item?.status === status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
+      <label>Source ou lien <input id="librarySource" type="url" value="${escapeAttr(item?.source || "")}"></label>
+      <label>Tags <input id="libraryTags" value="${escapeAttr((item?.tags || []).join(", "))}"></label>
+      <label>Fichier local <input id="libraryFile" type="file" accept=".pdf,.txt,.md,.doc,.docx,image/*,audio/*"></label>
+    </div>
+    <label>Description ou note <textarea id="libraryDescription">${escapeHtml(item?.description || "")}</textarea></label>
+    <label class="confirm-line"><input id="libraryAuthorized" type="checkbox" ${item ? "checked" : ""}> Je confirme etre autorise a conserver ce contenu dans mon espace personnel.</label>
+  `, () => {
+    const status = qs("#libraryStatus").value;
+    if (["transmission recue", "initiation requise"].includes(status) && !qs("#libraryAuthorized").checked) {
+      showToast("Confirmation requise pour ce contenu restreint.");
+      return;
+    }
+    const values = {
+      title: qs("#libraryTitle").value.trim(),
+      type: qs("#libraryType").value,
+      folder: qs("#libraryFolder").value,
+      author: qs("#libraryAuthor").value.trim(),
+      lineage: qs("#libraryLineage").value.trim(),
+      language: qs("#libraryLanguage").value.trim(),
+      status,
+      source: qs("#librarySource").value.trim(),
+      localFileName: qs("#libraryFile").files?.[0]?.name || item?.localFileName || "",
+      localFileType: qs("#libraryFile").files?.[0]?.type || item?.localFileType || "",
+      localOnly: Boolean(qs("#libraryFile").files?.[0] || item?.localOnly),
+      tags: qs("#libraryTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
+      description: qs("#libraryDescription").value.trim(),
+      private: true,
+      favorite: item?.favorite || false
+    };
+    if (item) {
+      Object.assign(item, values);
+      markUpdated(item);
+    } else {
+      state.libraryItems.push(newRecord(values));
+    }
+    saveState();
   });
 }
 
@@ -1846,6 +2080,190 @@ function openGuideDetail(guide) {
       </section>
     </article>
   `);
+}
+
+function renderAudio() {
+  qs("#audio").innerHTML = `
+    <section class="panel audio-workspace">
+      <div class="section-head"><div><span class="eyebrow">Lecteur audio</span><h2>Ecoute et apprentissage</h2></div><button class="primary-btn" id="chooseAudio">Ajouter un fichier local</button></div>
+      <input id="audioFile" type="file" accept="audio/*" hidden>
+      <audio id="audioPlayer" controls ${activeAudioUrl ? `src="${activeAudioUrl}"` : ""}></audio>
+      <div class="form-grid">
+        <label>Volume <input id="audioVolume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+        <label>Vitesse <select id="audioSpeed"><option>0.75</option><option selected>1</option><option>1.25</option><option>1.5</option><option>2</option></select></label>
+        <label class="confirm-line"><input id="audioLoop" type="checkbox"> Repetition</label>
+        <label>Pause entre passages <input id="audioPause" type="number" min="0" max="30" value="2"> secondes</label>
+      </div>
+      <div class="button-row">
+        <button class="ghost-btn" id="startBell">Cloche de debut</button>
+        <button class="ghost-btn" id="middleBell">Cloche intermediaire</button>
+        <button class="ghost-btn" id="endBell">Cloche de fin</button>
+      </div>
+      <p class="muted">Les fichiers audio personnels restent sur cet appareil. Seuls leur titre et leurs reglages peuvent etre synchronises.</p>
+    </section>
+    <section class="panel">
+      <span class="eyebrow">Fichiers recents</span>
+      <div class="compact-list">${state.audioItems.map((item) => `<div><span>${escapeHtml(item.title)}</span><strong>${escapeHtml(item.practice || "Personnel")}</strong></div>`).join("") || empty("Aucun fichier reference.")}</div>
+    </section>
+  `;
+  const player = qs("#audioPlayer");
+  qs("#chooseAudio").addEventListener("click", () => qs("#audioFile").click());
+  qs("#audioFile").addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (activeAudioUrl) URL.revokeObjectURL(activeAudioUrl);
+    activeAudioUrl = URL.createObjectURL(file);
+    state.audioItems.push(newRecord({ title: file.name, type: file.type, size: file.size, localOnly: true, practice: "" }));
+    saveState();
+    renderAudio();
+  });
+  qs("#audioVolume").addEventListener("input", (event) => { player.volume = Number(event.target.value); });
+  qs("#audioSpeed").addEventListener("change", (event) => { player.playbackRate = Number(event.target.value); });
+  qs("#audioLoop").addEventListener("change", (event) => { player.loop = event.target.checked; });
+  qs("#startBell").addEventListener("click", () => ringBellTone(432, 1.8));
+  qs("#middleBell").addEventListener("click", () => ringBellTone(540, 1));
+  qs("#endBell").addEventListener("click", () => ringBellTone(324, 2.2));
+}
+
+function ringBellTone(frequency, duration) {
+  if (!state.settings.bell) return;
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.setValueAtTime(frequency, context.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(frequency / 2, context.currentTime + duration);
+    gain.gain.setValueAtTime(0.001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.16, context.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + duration);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + duration);
+  } catch {
+    // Le navigateur peut attendre une interaction avant de jouer un son.
+  }
+}
+
+function renderTibetanCalendar() {
+  const profile = state.settings.tibetanCalendarProfile || "personnalise";
+  const events = state.calendarEvents.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  qs("#tibetanCalendar").innerHTML = `
+    <section class="panel">
+      <div class="section-head"><div><span class="eyebrow">Calendrier optionnel</span><h2>Calendrier tibetain</h2></div><button class="primary-btn" id="addCalendarEvent">Ajouter un evenement</button></div>
+      <label>Profil <select id="calendarProfile">${["Nyingma", "Karma Kagyu", "Gelug", "Sakya", "Bon", "personnalise"].map((value) => `<option ${profile === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      <p class="detail-caution">Les dates peuvent varier selon les calendriers et les lignees. Seuls vos evenements saisis ou clairement sources sont affiches.</p>
+      <div class="event-list">${events.map(calendarEventCard).join("") || empty("Aucune date ajoutee. L'application n'invente pas de dates traditionnelles.")}</div>
+    </section>
+  `;
+  qs("#calendarProfile").addEventListener("change", (event) => {
+    state.settings.tibetanCalendarProfile = event.target.value;
+    saveState();
+  });
+  qs("#addCalendarEvent").addEventListener("click", () => openCalendarEventDialog());
+  document.querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openCalendarEventDialog(state.calendarEvents.find((item) => item.id === button.dataset.editEvent))));
+  document.querySelectorAll("[data-delete-event]").forEach((button) => button.addEventListener("click", () => softDelete("calendarEvents", button.dataset.deleteEvent, "Supprimer cet evenement ?")));
+}
+
+function calendarEventCard(event) {
+  return `<article class="event-card"><div><span class="tag">${escapeHtml(event.tradition || "Personnalise")}</span><h3>${escapeHtml(event.name)}</h3><p>${event.date} · ${escapeHtml(event.explanation || "")}</p>${safeExternalUrl(event.source) ? `<a href="${escapeAttr(safeExternalUrl(event.source))}" target="_blank" rel="noopener">Source</a>` : ""}</div><div class="button-row"><button class="ghost-btn" data-edit-event="${event.id}">Modifier</button><button class="icon-btn danger-btn" data-delete-event="${event.id}" aria-label="Supprimer">×</button></div></article>`;
+}
+
+function openCalendarEventDialog(event = null) {
+  openDialog(event ? "Modifier l'evenement" : "Nouvel evenement", `
+    <label>Nom <input id="eventName" value="${escapeAttr(event?.name || "")}" required></label>
+    <div class="form-grid">
+      <label>Date <input id="eventDate" type="date" value="${event?.date || todayKey()}"></label>
+      <label>Tradition <input id="eventTradition" value="${escapeAttr(event?.tradition || state.settings.tibetanCalendarProfile || "personnalise")}"></label>
+      <label>Type <select id="eventType">${["Phase lunaire", "Guru Rinpoche", "Tara", "Dakini", "Protecteurs", "Tsok", "Fete", "Maitre", "Centre", "Personnel"].map((type) => `<option ${event?.type === type ? "selected" : ""}>${type}</option>`).join("")}</select></label>
+      <label>Source facultative <input id="eventSource" type="url" value="${escapeAttr(event?.source || "")}"></label>
+    </div>
+    <label>Courte explication <textarea id="eventExplanation">${escapeHtml(event?.explanation || "")}</textarea></label>
+    <label>Pratique suggeree <input id="eventPractice" value="${escapeAttr(event?.suggestedPractice || "")}"></label>
+  `, () => {
+    const values = { name: qs("#eventName").value.trim(), date: qs("#eventDate").value, tradition: qs("#eventTradition").value.trim(), type: qs("#eventType").value, source: qs("#eventSource").value.trim(), explanation: qs("#eventExplanation").value.trim(), suggestedPractice: qs("#eventPractice").value.trim() };
+    if (event) { Object.assign(event, values); markUpdated(event); } else state.calendarEvents.push(newRecord(values));
+    saveState();
+  });
+}
+
+function renderReminders() {
+  qs("#reminders").innerHTML = `
+    <section class="panel">
+      <div class="section-head"><div><span class="eyebrow">Notifications facultatives</span><h2>Rappels respectueux</h2></div><button class="primary-btn" id="addReminder">Nouveau rappel</button></div>
+      <p class="muted">Les notifications sont des invitations discretes, jamais des obligations.</p>
+      <div class="button-row">
+        <button class="ghost-btn" id="requestNotifications">Autoriser les notifications</button>
+        <label class="confirm-line"><input id="pauseReminders" type="checkbox" ${state.settings.remindersPaused ? "checked" : ""}> Suspendre tous les rappels</label>
+      </div>
+      <div class="reminder-list">${state.reminders.map(reminderCard).join("") || empty("Aucun rappel active.")}</div>
+    </section>
+  `;
+  qs("#requestNotifications").addEventListener("click", async () => {
+    if (!("Notification" in window)) return showToast("Les notifications ne sont pas disponibles sur ce navigateur.");
+    const permission = await Notification.requestPermission();
+    showToast(permission === "granted" ? "Notifications autorisees." : "Autorisation non accordee.");
+  });
+  qs("#pauseReminders").addEventListener("change", (event) => {
+    state.settings.remindersPaused = event.target.checked;
+    saveState();
+    scheduleReminderChecks();
+  });
+  qs("#addReminder").addEventListener("click", () => openReminderDialog());
+  document.querySelectorAll("[data-toggle-reminder]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.reminders.find((reminder) => reminder.id === button.dataset.toggleReminder);
+    if (!item) return;
+    item.enabled = !item.enabled;
+    markUpdated(item);
+    saveState();
+    scheduleReminderChecks();
+  }));
+  document.querySelectorAll("[data-edit-reminder]").forEach((button) => button.addEventListener("click", () => openReminderDialog(state.reminders.find((item) => item.id === button.dataset.editReminder))));
+  document.querySelectorAll("[data-delete-reminder]").forEach((button) => button.addEventListener("click", () => softDelete("reminders", button.dataset.deleteReminder, "Supprimer ce rappel ?")));
+}
+
+function reminderCard(item) {
+  const days = ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
+  return `<article class="reminder-card"><div><span class="tag">${escapeHtml(item.type)}</span><h3>${escapeHtml(item.title)}</h3><p>${item.time} · ${(item.days || []).map((day) => days[day]).join(" ")}</p><p class="muted">${escapeHtml(item.message)}</p></div><div class="button-row"><button class="${item.enabled ? "primary-btn" : "ghost-btn"}" data-toggle-reminder="${item.id}">${item.enabled ? "Active" : "Desactive"}</button><button class="ghost-btn" data-edit-reminder="${item.id}">Modifier</button><button class="icon-btn danger-btn" data-delete-reminder="${item.id}" aria-label="Supprimer">×</button></div></article>`;
+}
+
+function openReminderDialog(item = null) {
+  const days = item?.days || [1, 2, 3, 4, 5, 6, 0];
+  openDialog(item ? "Modifier le rappel" : "Nouveau rappel", `
+    <label>Titre <input id="reminderTitle" value="${escapeAttr(item?.title || "Moment de pratique")}" required></label>
+    <div class="form-grid">
+      <label>Type <select id="reminderType">${["Pratique du matin", "Pratique du soir", "Routine", "Accumulation", "Calendrier tibetain", "Revue hebdomadaire", "Retraite"].map((type) => `<option ${item?.type === type ? "selected" : ""}>${type}</option>`).join("")}</select></label>
+      <label>Heure <input id="reminderTime" type="time" value="${item?.time || "08:00"}"></label>
+      <fieldset class="day-picker"><legend>Jours</legend>${[["L", 1], ["M", 2], ["M", 3], ["J", 4], ["V", 5], ["S", 6], ["D", 0]].map(([label, day]) => `<label><input name="reminderDay" type="checkbox" value="${day}" ${days.includes(day) ? "checked" : ""}>${label}</label>`).join("")}</fieldset>
+    </div>
+    <label>Message <textarea id="reminderMessage">${escapeHtml(item?.message || "Ton espace de pratique est disponible lorsque tu le souhaites.")}</textarea></label>
+  `, () => {
+    const values = { title: qs("#reminderTitle").value.trim(), type: qs("#reminderType").value, time: qs("#reminderTime").value, days: [...document.querySelectorAll('input[name="reminderDay"]:checked')].map((input) => Number(input.value)), message: qs("#reminderMessage").value.trim(), enabled: item?.enabled || false, lastTriggered: item?.lastTriggered || "" };
+    if (item) { Object.assign(item, values); markUpdated(item); } else state.reminders.push(newRecord(values));
+    saveState();
+    scheduleReminderChecks();
+  });
+}
+
+function scheduleReminderChecks() {
+  clearInterval(reminderInterval);
+  if (state.settings.remindersPaused) return;
+  reminderInterval = setInterval(checkReminders, 30000);
+  checkReminders();
+}
+
+function checkReminders() {
+  if (state.settings.remindersPaused || !("Notification" in window) || Notification.permission !== "granted") return;
+  const now = new Date();
+  const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  const triggerKey = `${todayKey(now)}-${time}`;
+  state.reminders.forEach((item) => {
+    if (!item.enabled || item.time !== time || !item.days.includes(now.getDay()) || item.lastTriggered === triggerKey) return;
+    new Notification(item.title, { body: item.message, icon: "./assets/icon.svg" });
+    item.lastTriggered = triggerKey;
+    markUpdated(item);
+    saveState();
+  });
 }
 
 function renderStats() {
@@ -1959,6 +2377,8 @@ function renderSettings() {
           <label>Duree par defaut <input id="defaultTimer" type="number" min="1" max="180" value="${state.settings.defaultTimer}"></label>
           <label>Cloche sonore <select id="bellSetting"><option value="true" ${state.settings.bell ? "selected" : ""}>Activee</option><option value="false" ${!state.settings.bell ? "selected" : ""}>Desactivee</option></select></label>
           <label>Statistiques <select id="statsVisibility"><option value="true" ${state.settings.statsVisible !== false ? "selected" : ""}>Visibles</option><option value="false" ${state.settings.statsVisible === false ? "selected" : ""}>Masquees</option></select></label>
+          <label>Premier jour de la semaine <select id="firstDaySetting"><option value="monday" ${state.settings.firstDayOfWeek !== "sunday" ? "selected" : ""}>Lundi</option><option value="sunday" ${state.settings.firstDayOfWeek === "sunday" ? "selected" : ""}>Dimanche</option></select></label>
+          <label>Fuseau horaire <input value="${escapeAttr(Intl.DateTimeFormat().resolvedOptions().timeZone)}" disabled></label>
           <label>Sauvegarde complete <button class="ghost-btn" id="exportData" type="button">Telecharger JSON</button></label>
           <label>Restaurer une sauvegarde
             <button class="ghost-btn" id="importData" type="button">Importer JSON</button>
@@ -1980,6 +2400,7 @@ function renderSettings() {
     state.settings.defaultTimer = Number(qs("#defaultTimer").value);
     state.settings.bell = qs("#bellSetting").value === "true";
     state.settings.statsVisible = qs("#statsVisibility").value === "true";
+    state.settings.firstDayOfWeek = qs("#firstDaySetting").value;
     clearTimerTicker();
     timer = createTimerState(state.settings.defaultTimer, timer.label);
     persistTimerState();
@@ -2471,6 +2892,15 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
 
+function safeExternalUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
 function renderView() {
   const renderers = {
     dashboard: renderDashboard,
@@ -2481,7 +2911,11 @@ function renderView() {
     rituals: renderRituals,
     journal: renderJournal,
     calendar: renderCalendar,
+    tibetanCalendar: renderTibetanCalendar,
+    retreats: renderRetreats,
     library: renderLibrary,
+    audio: renderAudio,
+    reminders: renderReminders,
     stats: renderStats,
     settings: renderSettings
   };
@@ -2615,3 +3049,4 @@ async function registerServiceWorker() {
 
 initializeAccount();
 registerServiceWorker();
+scheduleReminderChecks();

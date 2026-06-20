@@ -405,20 +405,76 @@ menu {
 
 .dashboard-actions,
 .routine-grid,
-.accumulation-grid {
+.accumulation-grid,
+.retreat-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
 }
 
 .routine-card,
-.accumulation-card {
+.accumulation-card,
+.retreat-card,
+.reminder-card,
+.event-card {
   display: grid;
   gap: 16px;
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
+}
+
+.retreat-grid,
+.reminder-list,
+.event-list {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.retreat-mode {
+  display: grid;
+  gap: 18px;
+}
+
+.retreat-checklist {
+  display: grid;
+  gap: 10px;
+}
+
+.retreat-checklist label,
+.confirm-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.retreat-checklist input,
+.confirm-line input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.audio-workspace {
+  display: grid;
+  gap: 18px;
+}
+
+.audio-workspace audio {
+  width: 100%;
+}
+
+.event-card,
+.reminder-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.event-card h3,
+.reminder-card h3,
+.retreat-card h3 {
+  margin: 5px 0;
 }
 
 .routine-card p,
@@ -1291,6 +1347,7 @@ menu {
   .dashboard-actions,
   .routine-grid,
   .accumulation-grid,
+  .retreat-grid,
   .form-grid,
   .library-grid,
   .right-rail {
@@ -1317,6 +1374,11 @@ menu {
   }
 
   .day-detail-item {
+    grid-template-columns: 1fr;
+  }
+
+  .event-card,
+  .reminder-card {
     grid-template-columns: 1fr;
   }
 
