@@ -25,16 +25,33 @@ export default async function handler(request, response) {
       return sendJson(response, 400, { error: "Donnees invalides." });
     }
     const data = JSON.stringify(body.data);
-    const rows = await sql`
-      INSERT INTO cc_user_state (user_id, data, revision, updated_at)
-      VALUES (${user.id}, ${data}::jsonb, 1, NOW())
-      ON CONFLICT (user_id)
-      DO UPDATE SET
-        data = EXCLUDED.data,
-        revision = cc_user_state.revision + 1,
-        updated_at = NOW()
-      RETURNING revision, updated_at
+    const expectedRevision = Number(body.expectedRevision || 0);
+    const force = body.force === true;
+    const currentRows = await sql`
+      SELECT data, revision, updated_at
+      FROM cc_user_state
+      WHERE user_id = ${user.id}
+      LIMIT 1
     `;
+    const current = currentRows[0];
+    if (!force && current && Number(current.revision) !== expectedRevision) {
+      return sendJson(response, 409, current);
+    }
+    if (!force && !current && expectedRevision !== 0) {
+      return sendJson(response, 409, { data: null, revision: 0, updated_at: null });
+    }
+    const rows = current
+      ? await sql`
+          UPDATE cc_user_state
+          SET data = ${data}::jsonb, revision = revision + 1, updated_at = NOW()
+          WHERE user_id = ${user.id}
+          RETURNING revision, updated_at
+        `
+      : await sql`
+          INSERT INTO cc_user_state (user_id, data, revision, updated_at)
+          VALUES (${user.id}, ${data}::jsonb, 1, NOW())
+          RETURNING revision, updated_at
+        `;
     return sendJson(response, 200, rows[0]);
   } catch (error) {
     console.error(error);

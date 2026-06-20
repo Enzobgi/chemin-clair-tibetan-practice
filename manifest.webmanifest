@@ -1,0 +1,40 @@
+{
+  "name": "Chemin Clair - Pratique tibetaine",
+  "short_name": "Chemin Clair",
+  "description": "Compagnon personnel de pratique bouddhiste tibetaine.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3eee7",
+  "theme_color": "#74283f",
+  "icons": [
+    {
+      "src": "./assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "./assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Minuteur",
+      "short_name": "Minuteur",
+      "url": "./?view=timer"
+    },
+    {
+      "name": "Compteur de mantras",
+      "short_name": "Mantras",
+      "url": "./?view=mantras"
+    },
+    {
+      "name": "Journal",
+      "short_name": "Journal",
+      "url": "./?view=journal"
+    }
+  ]
+}

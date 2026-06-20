@@ -1,10 +1,25 @@
+import {
+  CURRENT_SCHEMA_VERSION,
+  buildCalendarDays,
+  calculateStreak,
+  elapsedTimerSeconds,
+  localDateKey,
+  makeStableId,
+  mergeImportedState,
+  migrateState,
+  removeWithUndo,
+  remainingTimerSeconds,
+  restoreLastDeleted,
+  sessionDurationSeconds,
+  sumSessionSeconds,
+  validateBackup
+} from "./core.js";
+
 const STORAGE_KEY = "chemin-clair-state-v1";
+const TIMER_STORAGE_SUFFIX = "active-timer";
 
 function makeId() {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return makeStableId();
 }
 
 function clone(value) {
@@ -204,6 +219,7 @@ const libraryItems = [
 ];
 
 const seedState = {
+  schemaVersion: CURRENT_SCHEMA_VERSION,
   settings: {
     dailyGoal: 30,
     defaultTimer: 15,
@@ -218,6 +234,10 @@ const seedState = {
   practices: defaultPractices,
   sessions: [],
   journals: [],
+  deletedItems: [],
+  routines: [],
+  accumulations: [],
+  calendarEvents: [],
   mantra: {
     selected: "Om Mani Padme Hum",
     count: 0,
@@ -231,14 +251,13 @@ let syncStatus = "local";
 let syncTimer = null;
 let authMode = "login";
 let state = loadCachedState();
-let activeView = "dashboard";
-let timer = {
-  total: state.settings.defaultTimer * 60,
-  remaining: state.settings.defaultTimer * 60,
-  running: false,
-  interval: null,
-  label: "Meditation silencieuse"
-};
+const requestedView = new URLSearchParams(window.location.search).get("view");
+let activeView = navItems.some(([id]) => id === requestedView) ? requestedView : "dashboard";
+let calendarCursor = new Date();
+let timerInterval = null;
+let timer = loadTimerState();
+let toastTimer = null;
+let remoteRevision = 0;
 
 const qs = (selector) => document.querySelector(selector);
 
@@ -251,14 +270,15 @@ function loadCachedState(userId = null) {
     const accountKey = userId ? storageKey(userId) : storageKey(null);
     const raw = localStorage.getItem(accountKey) || (!userId ? localStorage.getItem(STORAGE_KEY) : null);
     const saved = raw ? JSON.parse(raw) : null;
-    return saved ? mergeState(seedState, saved) : clone(seedState);
+    return saved ? mergeState(seedState, saved) : migrateState(null, seedState);
   } catch {
-    return clone(seedState);
+    return migrateState(null, seedState);
   }
 }
 
 function mergeState(base, saved) {
-  const savedPractices = Array.isArray(saved.practices) ? saved.practices : base.practices;
+  const migrated = migrateState(saved, base);
+  const savedPractices = Array.isArray(migrated.practices) ? migrated.practices : base.practices;
   const practices = savedPractices.map((practice) => {
     const template = base.practices.find((item) => item.title === practice.title);
     const fallbackSteps = (practice.steps || []).map((step, index) => ({
@@ -278,11 +298,52 @@ function mergeState(base, saved) {
   });
   return {
     ...clone(base),
-    ...saved,
-    settings: { ...base.settings, ...(saved.settings || {}) },
-    mantra: { ...base.mantra, ...(saved.mantra || {}) },
+    ...migrated,
+    settings: { ...base.settings, ...(migrated.settings || {}) },
+    mantra: { ...base.mantra, ...(migrated.mantra || {}) },
     practices
   };
+}
+
+function timerStorageKey() {
+  return `${storageKey()}:${TIMER_STORAGE_SUFFIX}`;
+}
+
+function revisionStorageKey() {
+  return `${storageKey()}:revision`;
+}
+
+function createTimerState(minutes = state.settings.defaultTimer, label = "Meditation silencieuse") {
+  return {
+    id: makeId(),
+    totalSeconds: Math.max(1, Number(minutes || 1)) * 60,
+    elapsedBeforeStart: 0,
+    startedAt: null,
+    running: false,
+    label,
+    saved: false,
+    bellPlayed: false,
+    completedNaturally: false
+  };
+}
+
+function loadTimerState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(`${storageKey()}:${TIMER_STORAGE_SUFFIX}`));
+    if (saved && Number(saved.totalSeconds) > 0 && !saved.saved) return saved;
+  } catch {
+    // Invalid timer state falls back to a fresh timer.
+  }
+  return createTimerState();
+}
+
+function persistTimerState() {
+  localStorage.setItem(timerStorageKey(), JSON.stringify(timer));
+}
+
+function clearTimerTicker() {
+  if (timerInterval) clearInterval(timerInterval);
+  timerInterval = null;
 }
 
 function saveState({ remote = true } = {}) {
@@ -299,7 +360,7 @@ function scheduleRemoteSync() {
   syncTimer = setTimeout(syncStateNow, 500);
 }
 
-async function syncStateNow() {
+async function syncStateNow({ force = false } = {}) {
   if (!currentUser) return;
   try {
     syncStatus = "syncing";
@@ -307,9 +368,18 @@ async function syncStateNow() {
     const response = await fetch("/api/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: state })
+      body: JSON.stringify({ data: state, expectedRevision: remoteRevision, force })
     });
-    if (!response.ok) throw new Error("sync failed");
+    const payload = await response.json();
+    if (response.status === 409) {
+      syncStatus = "error";
+      openSyncConflict(payload);
+      renderAccountPanel();
+      return;
+    }
+    if (!response.ok) throw new Error(payload.error || "sync failed");
+    remoteRevision = Number(payload.revision || remoteRevision);
+    localStorage.setItem(revisionStorageKey(), String(remoteRevision));
     syncStatus = "synced";
     localStorage.removeItem(`${storageKey()}:dirty`);
   } catch {
@@ -333,6 +403,8 @@ async function restoreRemoteState({ importLocalWhenEmpty = true } = {}) {
     const response = await fetch("/api/state", { headers: { Accept: "application/json" } });
     if (!response.ok) throw new Error("load failed");
     const payload = await response.json();
+    remoteRevision = Number(payload.revision || 0);
+    localStorage.setItem(revisionStorageKey(), String(remoteRevision));
     if (payload.data) {
       state = mergeState(seedState, payload.data);
       localStorage.setItem(storageKey(), JSON.stringify(state));
@@ -357,6 +429,8 @@ async function initializeAccount() {
       currentUser = payload.user;
       const accountCache = localStorage.getItem(storageKey(payload.user.id));
       state = accountCache ? loadCachedState(payload.user.id) : state;
+      remoteRevision = Number(localStorage.getItem(revisionStorageKey()) || 0);
+      timer = loadTimerState();
       render();
       await restoreRemoteState({ importLocalWhenEmpty: true });
       return;
@@ -368,14 +442,11 @@ async function initializeAccount() {
 }
 
 function todayKey(date = new Date()) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return localDateKey(date);
 }
 
 function minutesFor(day) {
-  return state.sessions.filter((s) => s.date === day).reduce((sum, s) => sum + Number(s.minutes || 0), 0);
+  return sumSessionSeconds(state.sessions, day) / 60;
 }
 
 function weekStart(date = new Date()) {
@@ -394,13 +465,7 @@ function weekMinutes() {
 }
 
 function streak() {
-  let count = 0;
-  const cursor = new Date();
-  while (minutesFor(todayKey(cursor)) > 0) {
-    count += 1;
-    cursor.setDate(cursor.getDate() - 1);
-  }
-  return count;
+  return calculateStreak(state.sessions);
 }
 
 function totalMantras() {
@@ -508,6 +573,7 @@ function renderDashboard() {
   `;
   qs("#quickSession").addEventListener("click", openSessionDialog);
   bindPracticeButtons();
+  bindJournalActions();
 }
 
 function metric(label, value, hint) {
@@ -539,35 +605,45 @@ function practiceRow(p, detailed = false) {
         ${detailed ? `<button class="ghost-btn" data-view-practice="${p.id}">Rituel complet</button>` : ""}
         <button class="ghost-btn" data-start-practice="${p.id}">${p.minutes} min</button>
         <button class="primary-btn" data-log-practice="${p.id}">Valider</button>
+        ${detailed ? `
+          <button class="icon-btn" data-edit-practice="${p.id}" aria-label="Modifier ${escapeAttr(p.title)}" title="Modifier">✎</button>
+          <button class="icon-btn" data-duplicate-practice="${p.id}" aria-label="Dupliquer ${escapeAttr(p.title)}" title="Dupliquer">⧉</button>
+          <button class="icon-btn" data-archive-practice="${p.id}" aria-label="${p.archived ? "Restaurer" : "Archiver"} ${escapeAttr(p.title)}" title="${p.archived ? "Restaurer" : "Archiver"}">${p.archived ? "↥" : "⌄"}</button>
+          <button class="icon-btn danger-btn" data-delete-practice="${p.id}" aria-label="Supprimer ${escapeAttr(p.title)}" title="Supprimer">×</button>
+        ` : ""}
       </div>
     </article>
   `;
 }
 
 function renderTimer() {
+  const elapsed = elapsedTimerSeconds(timer);
+  const remaining = remainingTimerSeconds(timer);
+  const locked = elapsed > 0 || timer.running;
   qs("#timer").innerHTML = `
     <section class="timer-face">
       <div>
         <div class="timer-circle" id="timerCircle">
           <div class="timer-inner">
             <div>
-              <div class="timer-time" id="timerTime">${formatTime(timer.remaining)}</div>
+              <div class="timer-time" id="timerTime">${formatTime(remaining)}</div>
               <p class="muted">${escapeHtml(timer.label)}</p>
+              <p class="timer-elapsed" id="timerElapsed">Temps pratique: ${formatDuration(elapsed)}</p>
             </div>
           </div>
         </div>
         <div class="button-row" style="justify-content:center;margin-top:22px">
-          <button class="primary-btn" id="timerStart">${timer.running ? "Pause" : "Demarrer"}</button>
+          <button class="primary-btn" id="timerStart" ${timer.saved || timer.completedNaturally ? "disabled" : ""}>${timer.running ? "Pause" : "Demarrer"}</button>
           <button class="ghost-btn" id="timerReset">Reinitialiser</button>
-          <button class="ghost-btn" id="timerComplete">Terminer et enregistrer</button>
+          <button class="ghost-btn" id="timerComplete" ${timer.saved ? "disabled" : ""}>Terminer et enregistrer</button>
         </div>
       </div>
     </section>
     <section class="panel">
       <span class="eyebrow">Configuration</span>
       <div class="form-grid">
-        <label>Duree en minutes <input id="timerMinutes" type="number" min="1" max="180" value="${Math.round(timer.total / 60)}"></label>
-        <label>Type de session <select id="timerLabel">
+        <label>Duree en minutes <input id="timerMinutes" type="number" min="1" max="180" value="${Math.round(timer.totalSeconds / 60)}" ${locked ? "disabled" : ""}></label>
+        <label>Type de session <select id="timerLabel" ${locked ? "disabled" : ""}>
           <option ${timer.label === "Meditation silencieuse" ? "selected" : ""}>Meditation silencieuse</option>
           <option ${timer.label === "Refuge et bodhicitta" ? "selected" : ""}>Refuge et bodhicitta</option>
           <option ${timer.label === "Tonglen" ? "selected" : ""}>Tonglen</option>
@@ -582,67 +658,125 @@ function renderTimer() {
   qs("#timerReset").addEventListener("click", resetTimer);
   qs("#timerComplete").addEventListener("click", completeTimer);
   qs("#timerMinutes").addEventListener("change", (event) => {
-    timer.total = Math.max(1, Number(event.target.value)) * 60;
-    timer.remaining = timer.total;
-    updateTimerFace();
+    timer = createTimerState(Math.max(1, Number(event.target.value)), timer.label);
+    persistTimerState();
+    renderTimer();
   });
   qs("#timerLabel").addEventListener("change", (event) => {
     timer.label = event.target.value;
+    persistTimerState();
     renderTimer();
   });
+  if (timer.running) startTimerTicker();
 }
 
 function toggleTimer() {
   if (timer.running) {
-    clearInterval(timer.interval);
+    timer.elapsedBeforeStart = elapsedTimerSeconds(timer);
+    timer.startedAt = null;
     timer.running = false;
+    clearTimerTicker();
   } else {
+    if (elapsedTimerSeconds(timer) >= timer.totalSeconds) return;
+    timer.startedAt = Date.now();
     timer.running = true;
-    timer.interval = setInterval(() => {
-      timer.remaining = Math.max(0, timer.remaining - 1);
-      updateTimerFace();
-      if (timer.remaining === 0) {
-        clearInterval(timer.interval);
-        timer.running = false;
-        ringBell();
-        completeTimer();
-      }
-    }, 1000);
+    startTimerTicker();
   }
+  persistTimerState();
   renderTimer();
 }
 
 function resetTimer() {
-  clearInterval(timer.interval);
-  timer.running = false;
-  timer.remaining = timer.total;
+  clearTimerTicker();
+  timer = createTimerState(timer.totalSeconds / 60, timer.label);
+  persistTimerState();
   renderTimer();
 }
 
 function completeTimer() {
-  const completed = Math.max(1, Math.round((timer.total - timer.remaining) / 60) || Math.round(timer.total / 60));
-  state.sessions.push({ id: makeId(), date: todayKey(), label: timer.label, minutes: completed, mood: "stable" });
-  clearInterval(timer.interval);
+  if (timer.saved) return;
+  const elapsed = Math.floor(elapsedTimerSeconds(timer));
+  if (elapsed === 0 && !confirm("Aucune seconde ne s'est ecoulee. Enregistrer tout de meme une session de 0 seconde ?")) {
+    return;
+  }
+  clearTimerTicker();
   timer.running = false;
-  timer.remaining = timer.total;
-  ringBell();
+  timer.startedAt = null;
+  timer.elapsedBeforeStart = elapsed;
+  timer.saved = true;
+  if (!timer.bellPlayed && elapsed > 0) {
+    ringBell();
+    timer.bellPlayed = true;
+  }
+  persistTimerState();
+  const now = new Date().toISOString();
+  state.sessions.push({
+    id: makeId(),
+    date: todayKey(),
+    label: timer.label,
+    minutes: Math.round((elapsed / 60) * 100) / 100,
+    durationSeconds: elapsed,
+    mood: "stable",
+    createdAt: now,
+    updatedAt: now,
+    version: 1
+  });
   saveState();
+  timer = createTimerState(timer.totalSeconds / 60, timer.label);
+  persistTimerState();
   setView("dashboard");
+}
+
+function startTimerTicker() {
+  clearTimerTicker();
+  if (!timer.running) return;
+  timerInterval = setInterval(() => {
+    updateTimerFace();
+    if (remainingTimerSeconds(timer) <= 0) finishTimerNaturally();
+  }, 250);
+}
+
+function finishTimerNaturally() {
+  if (timer.completedNaturally) return;
+  clearTimerTicker();
+  timer.elapsedBeforeStart = timer.totalSeconds;
+  timer.startedAt = null;
+  timer.running = false;
+  timer.completedNaturally = true;
+  if (!timer.bellPlayed) {
+    ringBell();
+    timer.bellPlayed = true;
+  }
+  persistTimerState();
+  renderTimer();
 }
 
 function updateTimerFace() {
   const time = qs("#timerTime");
   const circle = qs("#timerCircle");
   if (!time || !circle) return;
-  const done = ((timer.total - timer.remaining) / timer.total) * 100;
-  time.textContent = formatTime(timer.remaining);
+  const remaining = remainingTimerSeconds(timer);
+  const elapsed = elapsedTimerSeconds(timer);
+  const done = timer.totalSeconds ? (elapsed / timer.totalSeconds) * 100 : 0;
+  time.textContent = formatTime(remaining);
   circle.style.setProperty("--timer-progress", `${done}%`);
+  const elapsedCopy = qs("#timerElapsed");
+  if (elapsedCopy) elapsedCopy.textContent = `Temps pratique: ${formatDuration(elapsed)}`;
 }
 
 function formatTime(seconds) {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
+  const safeSeconds = Math.max(0, Math.ceil(seconds));
+  const m = Math.floor(safeSeconds / 60);
+  const s = safeSeconds % 60;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function formatDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds || 0)));
+  if (value < 60) return `${value} s`;
+  const minutes = Math.floor(value / 60);
+  const remainingSeconds = value % 60;
+  return remainingSeconds ? `${minutes} min ${remainingSeconds} s` : `${minutes} min`;
 }
 
 function renderMantras() {
@@ -687,8 +821,14 @@ function renderMantras() {
   });
   qs("#saveMantra").addEventListener("click", () => {
     if (state.mantra.count > 0) {
-      state.mantra.history.push({ id: makeId(), date: todayKey(), name: state.mantra.selected, count: state.mantra.count });
-      state.sessions.push({ id: makeId(), date: todayKey(), label: `Mantra: ${state.mantra.selected}`, minutes: Math.max(1, Math.round(state.mantra.count / 18)), mood: "recitation" });
+      state.mantra.history.push(newRecord({ date: todayKey(), name: state.mantra.selected, count: state.mantra.count }));
+      state.sessions.push(newRecord({
+        date: todayKey(),
+        label: `Mantra: ${state.mantra.selected}`,
+        minutes: Math.max(1, Math.round(state.mantra.count / 18)),
+        durationSeconds: Math.max(1, Math.round(state.mantra.count / 18)) * 60,
+        mood: "recitation"
+      }));
       state.mantra.count = 0;
       saveState();
     }
@@ -700,6 +840,8 @@ function renderMantras() {
 }
 
 function renderRituals() {
+  const activePractices = state.practices.filter((practice) => !practice.archived);
+  const archivedPractices = state.practices.filter((practice) => practice.archived);
   qs("#rituals").innerHTML = `
     <section class="panel">
       <div class="section-head">
@@ -710,7 +852,13 @@ function renderRituals() {
         </div>
         <button class="primary-btn" id="addPractice">Ajouter</button>
       </div>
-      <div class="practice-list">${state.practices.map((practice) => practiceRow(practice, true)).join("")}</div>
+      <div class="practice-list">${activePractices.map((practice) => practiceRow(practice, true)).join("") || empty("Aucune pratique active.")}</div>
+      ${archivedPractices.length ? `
+        <details class="archived-section">
+          <summary>Pratiques archivees (${archivedPractices.length})</summary>
+          <div class="practice-list">${archivedPractices.map((practice) => practiceRow(practice, true)).join("")}</div>
+        </details>
+      ` : ""}
     </section>
   `;
   qs("#addPractice").addEventListener("click", openPracticeDialog);
@@ -722,7 +870,13 @@ function bindPracticeButtons() {
     btn.addEventListener("click", () => {
       const p = state.practices.find((item) => item.id === btn.dataset.logPractice);
       if (!p) return;
-      state.sessions.push({ id: makeId(), date: todayKey(), label: p.title, minutes: p.minutes, mood: p.category });
+      state.sessions.push(newRecord({
+        date: todayKey(),
+        label: p.title,
+        minutes: p.minutes,
+        durationSeconds: p.minutes * 60,
+        mood: p.category
+      }));
       ringBell();
       saveState();
     });
@@ -731,9 +885,9 @@ function bindPracticeButtons() {
     btn.addEventListener("click", () => {
       const p = state.practices.find((item) => item.id === btn.dataset.startPractice);
       if (!p) return;
-      timer.total = p.minutes * 60;
-      timer.remaining = timer.total;
-      timer.label = p.title;
+      clearTimerTicker();
+      timer = createTimerState(p.minutes, p.title);
+      persistTimerState();
       setView("timer");
     });
   });
@@ -742,6 +896,40 @@ function bindPracticeButtons() {
       const practice = state.practices.find((item) => item.id === btn.dataset.viewPractice);
       if (practice) openRitualDetail(practice);
     });
+  });
+  document.querySelectorAll("[data-edit-practice]").forEach((btn) => {
+    btn.addEventListener("click", () => openPracticeDialog(state.practices.find((item) => item.id === btn.dataset.editPractice)));
+  });
+  document.querySelectorAll("[data-duplicate-practice]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const source = state.practices.find((item) => item.id === btn.dataset.duplicatePractice);
+      if (!source) return;
+      const now = new Date().toISOString();
+      state.practices.push({
+        ...clone(source),
+        id: makeId(),
+        title: `${source.title} - copie`,
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+        version: 1
+      });
+      saveState();
+      showToast("Pratique dupliquee.");
+    });
+  });
+  document.querySelectorAll("[data-archive-practice]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const practice = state.practices.find((item) => item.id === btn.dataset.archivePractice);
+      if (!practice) return;
+      practice.archived = !practice.archived;
+      markUpdated(practice);
+      saveState();
+      showToast(practice.archived ? "Pratique archivee." : "Pratique restauree.");
+    });
+  });
+  document.querySelectorAll("[data-delete-practice]").forEach((btn) => {
+    btn.addEventListener("click", () => softDelete("practices", btn.dataset.deletePractice, "Supprimer cette pratique ?"));
   });
 }
 
@@ -799,6 +987,7 @@ function renderJournal() {
     </section>
   `;
   qs("#addJournal").addEventListener("click", openJournalDialog);
+  bindJournalActions();
 }
 
 function journalCard(entry) {
@@ -813,38 +1002,127 @@ function journalCard(entry) {
         <span class="tag">${escapeHtml(entry.mood || "presence")}</span>
         <span class="tag">${entry.minutes || 0} min</span>
       </div>
+      <div class="button-row">
+        <button class="ghost-btn" data-edit-journal="${entry.id}">Modifier</button>
+        <button class="ghost-btn danger-btn" data-delete-journal="${entry.id}">Supprimer</button>
+      </div>
     </article>
   `;
 }
 
 function renderCalendar() {
-  const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const offset = (first.getDay() + 6) % 7;
-  const start = new Date(first);
-  start.setDate(start.getDate() - offset);
-  const days = Array.from({ length: 35 }, (_, i) => {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    return d;
-  });
+  const year = calendarCursor.getFullYear();
+  const month = calendarCursor.getMonth();
+  const days = buildCalendarDays(year, month, state.settings.firstDayOfWeek !== "sunday");
   qs("#calendar").innerHTML = `
     <section class="panel">
       <span class="eyebrow">Calendrier</span>
-      <h2>${now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}</h2>
+      <div class="calendar-toolbar">
+        <div class="button-row">
+          <button class="icon-btn" id="previousMonth" aria-label="Mois precedent">‹</button>
+          <button class="ghost-btn" id="currentMonth">Aujourd'hui</button>
+          <button class="icon-btn" id="nextMonth" aria-label="Mois suivant">›</button>
+        </div>
+        <h2>${calendarCursor.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}</h2>
+      </div>
       <div class="calendar-grid">
         ${["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((d) => `<strong class="muted">${d}</strong>`).join("")}
-        ${days.map((d) => {
-          const key = todayKey(d);
-          const mins = minutesFor(key);
-          return `<article class="calendar-day ${key === todayKey() ? "is-today" : ""}">
-            <strong>${d.getDate()}</strong>
-            <span>${mins ? `${mins} min` : ""}</span>
-          </article>`;
+        ${days.map((day) => {
+          const seconds = sumSessionSeconds(state.sessions, day.key);
+          const journalCount = state.journals.filter((entry) => entry.date === day.key).length;
+          const mantraCount = state.mantra.history.filter((entry) => entry.date === day.key).reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+          const summary = [
+            seconds ? formatDuration(seconds) : "",
+            mantraCount ? `${mantraCount} mantra${mantraCount > 1 ? "s" : ""}` : "",
+            journalCount ? `${journalCount} note${journalCount > 1 ? "s" : ""}` : ""
+          ].filter(Boolean).join(" · ");
+          return `<button class="calendar-day ${day.key === todayKey() ? "is-today" : ""} ${day.inCurrentMonth ? "" : "is-outside"}" data-calendar-day="${day.key}">
+            <strong>${day.date.getDate()}</strong>
+            <span>${summary}</span>
+          </button>`;
         }).join("")}
       </div>
     </section>
   `;
+  qs("#previousMonth").addEventListener("click", () => {
+    calendarCursor = new Date(year, month - 1, 1);
+    renderCalendar();
+  });
+  qs("#nextMonth").addEventListener("click", () => {
+    calendarCursor = new Date(year, month + 1, 1);
+    renderCalendar();
+  });
+  qs("#currentMonth").addEventListener("click", () => {
+    calendarCursor = new Date();
+    renderCalendar();
+  });
+  document.querySelectorAll("[data-calendar-day]").forEach((button) => {
+    button.addEventListener("click", () => openDayDetail(button.dataset.calendarDay));
+  });
+}
+
+function openDayDetail(date) {
+  const sessions = state.sessions.filter((session) => session.date === date);
+  const journals = state.journals.filter((entry) => entry.date === date);
+  const mantras = state.mantra.history.filter((entry) => entry.date === date);
+  const dateLabel = new Date(`${date}T12:00:00`).toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric"
+  });
+  openInfoDialog(dateLabel, `
+    <article class="detail-sheet">
+      <div class="button-row">
+        <button class="primary-btn" id="addSessionForDay">Ajouter une session</button>
+      </div>
+      <section>
+        <h3>Sessions</h3>
+        <div class="day-detail-list">
+          ${sessions.map((session) => `
+            <article class="day-detail-item">
+              <div>
+                <strong>${escapeHtml(session.label)}</strong>
+                <p>${formatDuration(sessionDurationSeconds(session))}${session.mood ? ` · ${escapeHtml(session.mood)}` : ""}</p>
+              </div>
+              <div class="button-row">
+                <button class="ghost-btn" data-edit-session="${session.id}">Modifier</button>
+                <button class="ghost-btn" data-delete-session="${session.id}">Supprimer</button>
+              </div>
+            </article>
+          `).join("") || empty("Aucune session enregistree.")}
+        </div>
+      </section>
+      <section>
+        <h3>Mantras</h3>
+        <div class="day-detail-list">
+          ${mantras.map((entry) => `<article class="day-detail-item"><div><strong>${escapeHtml(entry.name)}</strong><p>${entry.count} repetitions</p></div></article>`).join("") || empty("Aucune accumulation de mantra.")}
+        </div>
+      </section>
+      <section>
+        <h3>Journal</h3>
+        <div class="day-detail-list">
+          ${journals.map((entry) => `
+            <article class="day-detail-item">
+              <div><strong>${escapeHtml(entry.title)}</strong><p>${escapeHtml(entry.body)}</p></div>
+              <button class="ghost-btn" data-edit-journal="${entry.id}">Modifier</button>
+            </article>
+          `).join("") || empty("Aucune note.")}
+        </div>
+      </section>
+    </article>
+  `);
+  qs("#addSessionForDay").addEventListener("click", () => {
+    qs("#practiceDialog").close();
+    openSessionDialog(date);
+  });
+  bindSessionActions();
+  document.querySelectorAll("[data-edit-journal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      qs("#practiceDialog").close();
+      openJournalDialog(state.journals.find((entry) => entry.id === button.dataset.editJournal));
+    });
+  });
 }
 
 function renderLibrary() {
@@ -914,7 +1192,14 @@ function renderSettings() {
           <label>Objectif quotidien en minutes <input id="dailyGoal" type="number" min="1" max="360" value="${state.settings.dailyGoal}"></label>
           <label>Duree par defaut <input id="defaultTimer" type="number" min="1" max="180" value="${state.settings.defaultTimer}"></label>
           <label>Cloche sonore <select id="bellSetting"><option value="true" ${state.settings.bell ? "selected" : ""}>Activee</option><option value="false" ${!state.settings.bell ? "selected" : ""}>Desactivee</option></select></label>
-          <label>Exporter les donnees <button class="ghost-btn" id="exportData" type="button">Telecharger JSON</button></label>
+          <label>Sauvegarde complete <button class="ghost-btn" id="exportData" type="button">Telecharger JSON</button></label>
+          <label>Restaurer une sauvegarde
+            <button class="ghost-btn" id="importData" type="button">Importer JSON</button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden>
+          </label>
+          <label>Historique des sessions <button class="ghost-btn" id="exportSessionsCsv" type="button">Exporter CSV</button></label>
+          <label>Accumulations et mantras <button class="ghost-btn" id="exportAccumulationsCsv" type="button">Exporter CSV</button></label>
+          <label>Journal et statistiques <button class="ghost-btn" id="printReport" type="button">Imprimer / PDF</button></label>
         </div>
         <div class="button-row">
           <button class="primary-btn" id="saveSettings">Enregistrer</button>
@@ -927,8 +1212,9 @@ function renderSettings() {
     state.settings.dailyGoal = Number(qs("#dailyGoal").value);
     state.settings.defaultTimer = Number(qs("#defaultTimer").value);
     state.settings.bell = qs("#bellSetting").value === "true";
-    timer.total = state.settings.defaultTimer * 60;
-    timer.remaining = timer.total;
+    clearTimerTicker();
+    timer = createTimerState(state.settings.defaultTimer, timer.label);
+    persistTimerState();
     saveState();
   });
   qs("#resetData").addEventListener("click", () => {
@@ -940,53 +1226,66 @@ function renderSettings() {
     }
   });
   qs("#exportData").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `chemin-clair-${todayKey()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadFile(`chemin-clair-${todayKey()}.json`, JSON.stringify(state, null, 2), "application/json");
   });
+  qs("#importData").addEventListener("click", () => qs("#importFile").click());
+  qs("#importFile").addEventListener("change", importBackupFile);
+  qs("#exportSessionsCsv").addEventListener("click", exportSessionsCsv);
+  qs("#exportAccumulationsCsv").addEventListener("click", exportAccumulationsCsv);
+  qs("#printReport").addEventListener("click", printJournalReport);
 }
 
-function openSessionDialog() {
-  openDialog("Ajouter une session", `
+function openSessionDialog(date = todayKey(), session = null) {
+  const editing = Boolean(session);
+  const duration = session ? sessionDurationSeconds(session) : 15 * 60;
+  openDialog(editing ? "Modifier la session" : "Ajouter une session", `
     <div class="form-grid">
-      <label>Nom <input id="sessionLabel" value="Pratique libre"></label>
-      <label>Duree <input id="sessionMinutes" type="number" min="1" value="15"></label>
-      <label>Qualite <select id="sessionMood"><option>stable</option><option>agite</option><option>clair</option><option>fatigue</option><option>profond</option></select></label>
-      <label>Date <input id="sessionDate" type="date" value="${todayKey()}"></label>
+      <label>Nom <input id="sessionLabel" value="${escapeAttr(session?.label || "Pratique libre")}" required></label>
+      <label>Minutes <input id="sessionMinutes" type="number" min="0" value="${Math.floor(duration / 60)}"></label>
+      <label>Secondes <input id="sessionSeconds" type="number" min="0" max="59" value="${Math.round(duration % 60)}"></label>
+      <label>Qualite <select id="sessionMood">${["stable", "agite", "clair", "fatigue", "profond"].map((mood) => `<option ${session?.mood === mood ? "selected" : ""}>${mood}</option>`).join("")}</select></label>
+      <label>Date <input id="sessionDate" type="date" value="${escapeAttr(session?.date || date)}" required></label>
     </div>
   `, () => {
-    state.sessions.push({
-      id: makeId(),
+    const durationSeconds = Number(qs("#sessionMinutes").value || 0) * 60 + Number(qs("#sessionSeconds").value || 0);
+    const values = {
       date: qs("#sessionDate").value,
-      label: qs("#sessionLabel").value,
-      minutes: Number(qs("#sessionMinutes").value),
+      label: qs("#sessionLabel").value.trim() || "Pratique libre",
+      durationSeconds,
+      minutes: durationSeconds / 60,
       mood: qs("#sessionMood").value
-    });
+    };
+    if (session) {
+      Object.assign(session, values);
+      markUpdated(session);
+    } else {
+      const now = new Date().toISOString();
+      state.sessions.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
+    }
     saveState();
   });
 }
 
-function openPracticeDialog() {
-  openDialog("Nouvelle pratique", `
-    <label>Titre <input id="practiceTitle" value="Nouvelle pratique"></label>
-    <div class="form-grid">
-      <label>Categorie <input id="practiceCategory" value="Personnel"></label>
-      <label>Duree <input id="practiceMinutes" type="number" min="1" value="10"></label>
-    </div>
-    <label>But de la pratique <textarea id="practicePurpose">Clarifier l'intention de cette pratique personnelle.</textarea></label>
-    <label>Preparation <textarea id="practicePreparation">Preparer un espace calme, regler le minuteur et adopter une posture stable.</textarea></label>
-    <label>Etapes detaillees, une par ligne au format Titre | Instructions
-      <textarea id="practiceSteps">Preparation | Stabiliser le corps et poser l'intention.
+function openPracticeDialog(practice = null) {
+  const stepsText = practice
+    ? (practice.detailedSteps || []).map((step) => `${step.title} | ${step.instruction || ""}`).join("\n")
+    : `Preparation | Stabiliser le corps et poser l'intention.
 Pratique principale | Suivre les instructions personnelles autorisees avec attention.
-Dedication | Reposer l'esprit et dedier les bienfaits.</textarea>
+Dedication | Reposer l'esprit et dedier les bienfaits.`;
+  openDialog(practice ? "Modifier la pratique" : "Nouvelle pratique", `
+    <label>Titre <input id="practiceTitle" value="${escapeAttr(practice?.title || "Nouvelle pratique")}" required></label>
+    <div class="form-grid">
+      <label>Categorie <input id="practiceCategory" value="${escapeAttr(practice?.category || "Personnel")}"></label>
+      <label>Duree <input id="practiceMinutes" type="number" min="1" value="${practice?.minutes || 10}"></label>
+    </div>
+    <label>But de la pratique <textarea id="practicePurpose">${escapeHtml(practice?.purpose || "Clarifier l'intention de cette pratique personnelle.")}</textarea></label>
+    <label>Preparation <textarea id="practicePreparation">${escapeHtml(practice?.preparation || "Preparer un espace calme, regler le minuteur et adopter une posture stable.")}</textarea></label>
+    <label>Etapes detaillees, une par ligne au format Titre | Instructions
+      <textarea id="practiceSteps">${escapeHtml(stepsText)}</textarea>
     </label>
-    <label>Cloture <textarea id="practiceClosing">Terminer par quelques respirations calmes avant de se lever.</textarea></label>
-    <label>Point d'attention <textarea id="practiceCaution">Adapter la pratique a sa situation et aux instructions de son enseignant.</textarea></label>
-    <label>Resume <textarea id="practiceNotes">Sequence personnelle a utiliser dans le respect des transmissions recues.</textarea></label>
+    <label>Cloture <textarea id="practiceClosing">${escapeHtml(practice?.closing || "Terminer par quelques respirations calmes avant de se lever.")}</textarea></label>
+    <label>Point d'attention <textarea id="practiceCaution">${escapeHtml(practice?.caution || "Adapter la pratique a sa situation et aux instructions de son enseignant.")}</textarea></label>
+    <label>Resume <textarea id="practiceNotes">${escapeHtml(practice?.notes || "Sequence personnelle a utiliser dans le respect des transmissions recues.")}</textarea></label>
   `, () => {
     const detailedSteps = qs("#practiceSteps").value
       .split("\n")
@@ -1000,8 +1299,7 @@ Dedication | Reposer l'esprit et dedier les bienfaits.</textarea>
           instruction: instructionParts.join("|").trim() || "Accomplir cette etape avec attention."
         };
       });
-    state.practices.push({
-      id: makeId(),
+    const values = {
       title: qs("#practiceTitle").value,
       category: qs("#practiceCategory").value,
       minutes: Number(qs("#practiceMinutes").value),
@@ -1012,31 +1310,264 @@ Dedication | Reposer l'esprit et dedier les bienfaits.</textarea>
       closing: qs("#practiceClosing").value,
       caution: qs("#practiceCaution").value,
       notes: qs("#practiceNotes").value
-    });
+    };
+    if (practice) {
+      Object.assign(practice, values);
+      markUpdated(practice);
+    } else {
+      const now = new Date().toISOString();
+      state.practices.push({ id: makeId(), ...values, archived: false, createdAt: now, updatedAt: now, version: 1 });
+    }
     saveState();
   });
 }
 
-function openJournalDialog() {
-  openDialog("Nouvelle note", `
-    <label>Titre <input id="journalTitle" value="Apres la pratique"></label>
+function openJournalDialog(entry = null) {
+  openDialog(entry ? "Modifier la note" : "Nouvelle note", `
+    <label>Titre <input id="journalTitle" value="${escapeAttr(entry?.title || "Apres la pratique")}" required></label>
     <div class="form-grid">
-      <label>Date <input id="journalDate" type="date" value="${todayKey()}"></label>
-      <label>Minutes <input id="journalMinutes" type="number" min="0" value="${minutesFor(todayKey())}"></label>
-      <label>Etat <input id="journalMood" value="presence"></label>
+      <label>Date <input id="journalDate" type="date" value="${escapeAttr(entry?.date || todayKey())}"></label>
+      <label>Minutes <input id="journalMinutes" type="number" min="0" value="${entry?.minutes ?? minutesFor(todayKey())}"></label>
+      <label>Etat <input id="journalMood" value="${escapeAttr(entry?.mood || "presence")}"></label>
     </div>
-    <label>Note <textarea id="journalBody">Ce que je remarque aujourd'hui...</textarea></label>
+    <label>Note <textarea id="journalBody">${escapeHtml(entry?.body || "Ce que je remarque aujourd'hui...")}</textarea></label>
   `, () => {
-    state.journals.push({
-      id: makeId(),
+    const values = {
       title: qs("#journalTitle").value,
       date: qs("#journalDate").value,
       minutes: Number(qs("#journalMinutes").value),
       mood: qs("#journalMood").value,
       body: qs("#journalBody").value
-    });
+    };
+    if (entry) {
+      Object.assign(entry, values);
+      markUpdated(entry);
+    } else {
+      const now = new Date().toISOString();
+      state.journals.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
+    }
     saveState();
   });
+}
+
+function markUpdated(record) {
+  record.updatedAt = new Date().toISOString();
+  record.version = Number(record.version || 1) + 1;
+}
+
+function newRecord(values) {
+  const now = new Date().toISOString();
+  return { id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 };
+}
+
+function softDelete(collection, id, question = "Supprimer cet element ?") {
+  if (!confirm(question) || !removeWithUndo(state, collection, id)) return;
+  saveState();
+  showToast("Element place dans la corbeille.", true);
+}
+
+function undoLastDelete() {
+  if (!restoreLastDeleted(state)) return;
+  saveState();
+  showToast("Suppression annulee.");
+}
+
+function showToast(message, canUndo = false, actionLabel = "Annuler", action = null) {
+  clearTimeout(toastTimer);
+  const toast = qs("#undoToast");
+  qs("#undoToastMessage").textContent = message;
+  const button = qs("#undoDeleteBtn");
+  button.hidden = !canUndo && !action;
+  button.textContent = actionLabel;
+  button.onclick = action || undoLastDelete;
+  toast.hidden = false;
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+  }, 7000);
+}
+
+function bindSessionActions() {
+  document.querySelectorAll("[data-edit-session]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = state.sessions.find((item) => item.id === button.dataset.editSession);
+      if (!session) return;
+      qs("#practiceDialog").close();
+      openSessionDialog(session.date, session);
+    });
+  });
+  document.querySelectorAll("[data-delete-session]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const session = state.sessions.find((item) => item.id === button.dataset.deleteSession);
+      if (!session) return;
+      qs("#practiceDialog").close();
+      softDelete("sessions", session.id, "Supprimer cette session ? Elle pourra etre restauree immediatement.");
+    });
+  });
+}
+
+function bindJournalActions() {
+  document.querySelectorAll("[data-edit-journal]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const entry = state.journals.find((item) => item.id === button.dataset.editJournal);
+      if (entry) openJournalDialog(entry);
+    });
+  });
+  document.querySelectorAll("[data-delete-journal]").forEach((button) => {
+    button.addEventListener("click", () => softDelete("journals", button.dataset.deleteJournal, "Supprimer cette note ?"));
+  });
+}
+
+function downloadFile(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function csvCell(value) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+function exportSessionsCsv() {
+  const rows = [
+    ["id", "date", "pratique", "duree_secondes", "duree_minutes", "qualite"],
+    ...state.sessions.map((session) => [
+      session.id,
+      session.date,
+      session.label,
+      sessionDurationSeconds(session),
+      (sessionDurationSeconds(session) / 60).toFixed(2),
+      session.mood || ""
+    ])
+  ];
+  downloadFile(`chemin-clair-sessions-${todayKey()}.csv`, rows.map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv;charset=utf-8");
+}
+
+function exportAccumulationsCsv() {
+  const rows = [["type", "id", "date", "nom", "nombre", "objectif"]];
+  state.mantra.history.forEach((entry) => rows.push(["mantra", entry.id, entry.date, entry.name, entry.count, ""]));
+  state.accumulations.forEach((entry) => rows.push([
+    "accumulation",
+    entry.id,
+    entry.date || entry.startDate || "",
+    entry.name || entry.title || "",
+    entry.count || entry.current || 0,
+    entry.target || entry.goal || ""
+  ]));
+  downloadFile(`chemin-clair-accumulations-${todayKey()}.csv`, rows.map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv;charset=utf-8");
+}
+
+async function importBackupFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const imported = JSON.parse(await file.text());
+    const validation = validateBackup(imported);
+    if (!validation.valid) throw new Error(validation.errors.join("\n"));
+    const counts = {
+      sessions: imported.sessions?.length || 0,
+      journals: imported.journals?.length || 0,
+      practices: imported.practices?.length || 0,
+      accumulations: imported.accumulations?.length || 0
+    };
+    openImportPreview(imported, counts);
+  } catch (error) {
+    openInfoDialog("Sauvegarde invalide", `
+      <p>Le fichier ne peut pas etre importe.</p>
+      <pre class="import-error">${escapeHtml(error.message || "Format JSON invalide.")}</pre>
+    `);
+  }
+}
+
+function openImportPreview(imported, counts) {
+  openInfoDialog("Apercu de la sauvegarde", `
+    <p>Le fichier est valide. Verifiez son contenu avant de poursuivre.</p>
+    <div class="metrics-grid import-preview">
+      ${metric("Sessions", counts.sessions, "enregistrements")}
+      ${metric("Journal", counts.journals, "notes")}
+      ${metric("Pratiques", counts.practices, "sequences")}
+      ${metric("Accumulations", counts.accumulations, "engagements")}
+    </div>
+    <div class="detail-caution">
+      <strong>Remplacer</strong> efface l'etat actuel de ce compte avant d'importer. Une sauvegarde automatique sera telechargee d'abord.
+    </div>
+    <div class="button-row">
+      <button class="primary-btn" id="mergeImport" type="button">Fusionner</button>
+      <button class="ghost-btn danger-btn" id="replaceImport" type="button">Remplacer</button>
+    </div>
+  `);
+  qs("#mergeImport").addEventListener("click", () => {
+    state = mergeImportedState(state, imported, seedState);
+    qs("#practiceDialog").close();
+    saveState();
+    showToast("Sauvegarde fusionnee.");
+  });
+  qs("#replaceImport").addEventListener("click", () => {
+    if (!confirm("Remplacer toutes les donnees actuelles par cette sauvegarde ?")) return;
+    downloadFile(`chemin-clair-avant-import-${todayKey()}.json`, JSON.stringify(state, null, 2), "application/json");
+    state = mergeState(seedState, imported);
+    qs("#practiceDialog").close();
+    saveState();
+    showToast("Sauvegarde restauree.");
+  });
+}
+
+function openSyncConflict(payload) {
+  const cloudState = payload.data ? mergeState(seedState, payload.data) : migrateState(null, seedState);
+  const cloudRevision = Number(payload.revision || 0);
+  openInfoDialog("Modifications sur plusieurs appareils", `
+    <p>Des changements plus recents existent deja dans le nuage. Choisissez comment les reunir.</p>
+    <div class="button-stack">
+      <button class="primary-btn" id="mergeConflict" type="button">Fusionner les deux versions</button>
+      <button class="ghost-btn" id="keepCloudConflict" type="button">Utiliser la version du nuage</button>
+      <button class="ghost-btn danger-btn" id="keepLocalConflict" type="button">Garder uniquement cet appareil</button>
+    </div>
+  `);
+  qs("#mergeConflict").addEventListener("click", async () => {
+    state = mergeImportedState(cloudState, state, seedState);
+    remoteRevision = cloudRevision;
+    qs("#practiceDialog").close();
+    localStorage.setItem(storageKey(), JSON.stringify(state));
+    await syncStateNow();
+    render();
+  });
+  qs("#keepCloudConflict").addEventListener("click", () => {
+    state = cloudState;
+    remoteRevision = cloudRevision;
+    localStorage.setItem(storageKey(), JSON.stringify(state));
+    localStorage.setItem(revisionStorageKey(), String(remoteRevision));
+    localStorage.removeItem(`${storageKey()}:dirty`);
+    syncStatus = "synced";
+    qs("#practiceDialog").close();
+    render();
+  });
+  qs("#keepLocalConflict").addEventListener("click", async () => {
+    if (!confirm("Remplacer la version du nuage par les donnees de cet appareil ?")) return;
+    remoteRevision = cloudRevision;
+    qs("#practiceDialog").close();
+    await syncStateNow({ force: true });
+    render();
+  });
+}
+
+function printJournalReport() {
+  const windowRef = window.open("", "_blank", "noopener,noreferrer");
+  if (!windowRef) {
+    showToast("Autorisez les fenetres contextuelles pour imprimer.");
+    return;
+  }
+  const totalSeconds = sumSessionSeconds(state.sessions);
+  windowRef.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Chemin Clair - Rapport</title>
+    <style>body{font:16px/1.55 Georgia,serif;max-width:820px;margin:40px auto;padding:0 24px;color:#2c2622}h1,h2{color:#6f263d}article{border-top:1px solid #d8c9bb;padding:14px 0}.muted{color:#6d625b}@media print{button{display:none}}</style>
+    </head><body><h1>Chemin Clair</h1><p class="muted">Rapport du ${new Date().toLocaleDateString("fr-FR")}</p>
+    <h2>Statistiques</h2><p>${state.sessions.length} sessions · ${formatDuration(totalSeconds)} de pratique · ${state.mantra.history.reduce((sum, item) => sum + Number(item.count || 0), 0)} mantras</p>
+    <h2>Journal</h2>${state.journals.slice().reverse().map((entry) => `<article><strong>${escapeHtml(entry.title)}</strong><div class="muted">${escapeHtml(entry.date)} · ${Number(entry.minutes || 0)} min</div><p>${escapeHtml(entry.body)}</p></article>`).join("") || "<p>Aucune note.</p>"}
+    <button onclick="window.print()">Imprimer ou enregistrer en PDF</button></body></html>`);
+  windowRef.document.close();
 }
 
 function openDialog(title, body, onSave) {
@@ -1157,6 +1688,8 @@ async function submitAuth(event) {
     currentUser = payload.user;
     const accountCache = localStorage.getItem(storageKey());
     state = accountCache ? loadCachedState(currentUser.id) : guestState;
+    remoteRevision = Number(localStorage.getItem(revisionStorageKey()) || 0);
+    timer = loadTimerState();
     localStorage.setItem(storageKey(), JSON.stringify(state));
     if (!accountCache) localStorage.setItem(`${storageKey()}:dirty`, "1");
     message.textContent = "Compte connecte. Synchronisation en cours...";
@@ -1179,10 +1712,11 @@ async function logoutAccount() {
     // The local account switch still succeeds if the network is unavailable.
   }
   currentUser = null;
+  remoteRevision = 0;
   syncStatus = "local";
   state = loadCachedState();
-  timer.total = state.settings.defaultTimer * 60;
-  timer.remaining = timer.total;
+  clearTimerTicker();
+  timer = loadTimerState();
   render();
   setView("dashboard");
 }
@@ -1213,4 +1747,25 @@ window.addEventListener("online", () => {
   if (currentUser) syncStateNow();
 });
 
+async function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.register("./sw.js");
+    registration.addEventListener("updatefound", () => {
+      const worker = registration.installing;
+      worker?.addEventListener("statechange", () => {
+        if (worker.state === "installed" && navigator.serviceWorker.controller) {
+          showToast("Une nouvelle version est disponible.", false, "Mettre a jour", () => {
+            worker.postMessage({ type: "SKIP_WAITING" });
+          });
+        }
+      });
+    });
+    navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload());
+  } catch {
+    // L'application reste utilisable en ligne si l'installation PWA est indisponible.
+  }
+}
+
 initializeAccount();
+registerServiceWorker();
