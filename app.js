@@ -226,7 +226,11 @@ const seedState = {
   }
 };
 
-let state = loadState();
+let currentUser = null;
+let syncStatus = "local";
+let syncTimer = null;
+let authMode = "login";
+let state = loadCachedState();
 let activeView = "dashboard";
 let timer = {
   total: state.settings.defaultTimer * 60,
@@ -238,9 +242,15 @@ let timer = {
 
 const qs = (selector) => document.querySelector(selector);
 
-function loadState() {
+function storageKey(userId = currentUser?.id) {
+  return userId ? `${STORAGE_KEY}:user:${userId}` : `${STORAGE_KEY}:guest`;
+}
+
+function loadCachedState(userId = null) {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const accountKey = userId ? storageKey(userId) : storageKey(null);
+    const raw = localStorage.getItem(accountKey) || (!userId ? localStorage.getItem(STORAGE_KEY) : null);
+    const saved = raw ? JSON.parse(raw) : null;
     return saved ? mergeState(seedState, saved) : clone(seedState);
   } catch {
     return clone(seedState);
@@ -275,9 +285,86 @@ function mergeState(base, saved) {
   };
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+function saveState({ remote = true } = {}) {
+  localStorage.setItem(storageKey(), JSON.stringify(state));
+  if (currentUser && remote) localStorage.setItem(`${storageKey()}:dirty`, "1");
   render();
+  if (currentUser && remote) scheduleRemoteSync();
+}
+
+function scheduleRemoteSync() {
+  clearTimeout(syncTimer);
+  syncStatus = "syncing";
+  renderAccountPanel();
+  syncTimer = setTimeout(syncStateNow, 500);
+}
+
+async function syncStateNow() {
+  if (!currentUser) return;
+  try {
+    syncStatus = "syncing";
+    renderAccountPanel();
+    const response = await fetch("/api/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ data: state })
+    });
+    if (!response.ok) throw new Error("sync failed");
+    syncStatus = "synced";
+    localStorage.removeItem(`${storageKey()}:dirty`);
+  } catch {
+    syncStatus = "error";
+  }
+  renderAccountPanel();
+}
+
+async function restoreRemoteState({ importLocalWhenEmpty = true } = {}) {
+  if (!currentUser) return;
+  if (localStorage.getItem(`${storageKey()}:dirty`) === "1") {
+    await syncStateNow();
+    if (syncStatus === "synced") {
+      render();
+      return;
+    }
+  }
+  syncStatus = "syncing";
+  renderAccountPanel();
+  try {
+    const response = await fetch("/api/state", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("load failed");
+    const payload = await response.json();
+    if (payload.data) {
+      state = mergeState(seedState, payload.data);
+      localStorage.setItem(storageKey(), JSON.stringify(state));
+      localStorage.removeItem(`${storageKey()}:dirty`);
+    } else if (importLocalWhenEmpty) {
+      await syncStateNow();
+    }
+    syncStatus = "synced";
+    render();
+  } catch {
+    syncStatus = "error";
+    renderAccountPanel();
+  }
+}
+
+async function initializeAccount() {
+  try {
+    const response = await fetch("/api/auth/session", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("session unavailable");
+    const payload = await response.json();
+    if (payload.user) {
+      currentUser = payload.user;
+      const accountCache = localStorage.getItem(storageKey(payload.user.id));
+      state = accountCache ? loadCachedState(payload.user.id) : state;
+      render();
+      await restoreRemoteState({ importLocalWhenEmpty: true });
+      return;
+    }
+  } catch {
+    syncStatus = "local";
+  }
+  renderAccountPanel();
 }
 
 function todayKey(date = new Date()) {
@@ -354,6 +441,38 @@ function renderShellStats() {
   qs("#weekMinutes").textContent = weekMinutes();
   qs("#totalMantras").textContent = totalMantras();
   qs("#goalRing").style.strokeDashoffset = String(circumference - (circumference * percent) / 100);
+}
+
+function renderAccountPanel() {
+  const panel = qs("#accountPanel");
+  if (!panel) return;
+  if (!currentUser) {
+    panel.innerHTML = `
+      <span class="eyebrow">Compte</span>
+      <strong>Mode local</strong>
+      <span>Connectez-vous pour synchroniser vos appareils.</span>
+      <button class="ghost-btn" id="openAuthBtn">Se connecter</button>
+    `;
+    qs("#openAuthBtn").addEventListener("click", () => openAuthDialog("login"));
+    return;
+  }
+  const statusCopy = {
+    synced: "Donnees synchronisees",
+    syncing: "Synchronisation...",
+    error: "Hors ligne, sauvegarde locale active",
+    local: "Sauvegarde locale"
+  };
+  panel.innerHTML = `
+    <span class="eyebrow">Compte</span>
+    <strong>${escapeHtml(currentUser.name)}</strong>
+    <span>${escapeHtml(currentUser.email)}</span>
+    <span class="sync-line">
+      <span class="sync-dot is-${syncStatus}"></span>
+      ${statusCopy[syncStatus] || statusCopy.local}
+    </span>
+    <button class="ghost-btn" id="logoutBtn">Se deconnecter</button>
+  `;
+  qs("#logoutBtn").addEventListener("click", logoutAccount);
 }
 
 function renderDashboard() {
@@ -813,9 +932,9 @@ function renderSettings() {
     saveState();
   });
   qs("#resetData").addEventListener("click", () => {
-    if (confirm("Reinitialiser toutes les donnees locales ?")) {
+    if (confirm("Reinitialiser toutes les donnees de ce compte ?")) {
       state = clone(seedState);
-      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(storageKey());
       saveState();
       setView("dashboard");
     }
@@ -994,7 +1113,78 @@ function renderView() {
 
 function render() {
   renderShellStats();
+  renderAccountPanel();
   renderView();
+}
+
+function openAuthDialog(mode = "login") {
+  authMode = mode;
+  const registering = authMode === "register";
+  qs("#authTitle").textContent = registering ? "Creer un compte" : "Connexion";
+  qs("#authIntro").textContent = registering
+    ? "Creez un compte pour conserver et synchroniser vos pratiques."
+    : "Retrouvez vos pratiques et votre progression sur tous vos appareils.";
+  qs("#authNameLabel").hidden = !registering;
+  qs("#authName").required = registering;
+  qs("#authPassword").autocomplete = registering ? "new-password" : "current-password";
+  qs("#authSubmit").textContent = registering ? "Creer mon compte" : "Se connecter";
+  qs("#authModeBtn").textContent = registering ? "J'ai deja un compte" : "Creer un compte";
+  qs("#authMessage").textContent = "";
+  qs("#authMessage").classList.remove("is-success");
+  qs("#authDialog").showModal();
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  const submit = qs("#authSubmit");
+  const message = qs("#authMessage");
+  submit.disabled = true;
+  message.textContent = authMode === "register" ? "Creation du compte..." : "Connexion...";
+  try {
+    const response = await fetch(`/api/auth/${authMode === "register" ? "register" : "login"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: qs("#authName").value,
+        email: qs("#authEmail").value,
+        password: qs("#authPassword").value
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Operation impossible.");
+
+    const guestState = state;
+    currentUser = payload.user;
+    const accountCache = localStorage.getItem(storageKey());
+    state = accountCache ? loadCachedState(currentUser.id) : guestState;
+    localStorage.setItem(storageKey(), JSON.stringify(state));
+    if (!accountCache) localStorage.setItem(`${storageKey()}:dirty`, "1");
+    message.textContent = "Compte connecte. Synchronisation en cours...";
+    message.classList.add("is-success");
+    await restoreRemoteState({ importLocalWhenEmpty: true });
+    qs("#authDialog").close();
+    qs("#authForm").reset();
+  } catch (error) {
+    message.textContent = error.message || "Operation impossible.";
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function logoutAccount() {
+  clearTimeout(syncTimer);
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // The local account switch still succeeds if the network is unavailable.
+  }
+  currentUser = null;
+  syncStatus = "local";
+  state = loadCachedState();
+  timer.total = state.settings.defaultTimer * 60;
+  timer.remaining = timer.total;
+  render();
+  setView("dashboard");
 }
 
 qs("#newIntentionBtn").addEventListener("click", () => {
@@ -1009,3 +1199,18 @@ qs("#newIntentionBtn").addEventListener("click", () => {
 renderNav();
 setView(activeView);
 renderShellStats();
+renderAccountPanel();
+
+qs("#closeAuthBtn").addEventListener("click", () => qs("#authDialog").close());
+qs("#authModeBtn").addEventListener("click", () => openAuthDialog(authMode === "login" ? "register" : "login"));
+qs("#authForm").addEventListener("submit", submitAuth);
+
+window.addEventListener("focus", () => {
+  if (currentUser) restoreRemoteState({ importLocalWhenEmpty: false });
+});
+
+window.addEventListener("online", () => {
+  if (currentUser) syncStateNow();
+});
+
+initializeAccount();

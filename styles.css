@@ -123,6 +123,7 @@ button {
 }
 
 .daily-card,
+.account-card,
 .panel,
 .metric-card,
 .practice-row,
@@ -138,6 +139,54 @@ button {
 .daily-card {
   margin-top: auto;
   padding: 16px;
+}
+
+.account-card {
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+}
+
+.account-card strong,
+.account-card span {
+  overflow-wrap: anywhere;
+}
+
+.account-card .eyebrow {
+  margin-bottom: 0;
+}
+
+.account-card .ghost-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.sync-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #a19b8f;
+}
+
+.sync-dot.is-synced {
+  background: #398067;
+}
+
+.sync-dot.is-syncing {
+  background: var(--saffron);
+}
+
+.sync-dot.is-error {
+  background: #b44242;
 }
 
 .daily-card strong {
@@ -225,7 +274,8 @@ menu {
 .primary-btn,
 .ghost-btn,
 .icon-btn,
-.chip {
+.chip,
+.text-btn {
   padding: 10px 14px;
 }
 
@@ -243,6 +293,13 @@ menu {
   background: rgba(255, 253, 247, 0.72);
   color: var(--ink);
   border-color: var(--line);
+}
+
+.text-btn {
+  background: transparent;
+  border-color: transparent;
+  color: var(--maroon);
+  font-weight: 800;
 }
 
 .icon-btn {
@@ -633,6 +690,26 @@ dialog::backdrop {
   background: var(--panel);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
+}
+
+.auth-card {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-card .primary-btn {
+  width: 100%;
+}
+
+.form-message {
+  min-height: 22px;
+  margin: 0;
+  color: var(--maroon);
+  font-size: 0.9rem;
+}
+
+.form-message.is-success {
+  color: #286b55;
 }
 
 .detail-sheet {

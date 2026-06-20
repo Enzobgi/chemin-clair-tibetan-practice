@@ -19,6 +19,13 @@
 
         <nav class="nav-list" id="navList"></nav>
 
+        <section class="account-card" id="accountPanel">
+          <span class="eyebrow">Compte</span>
+          <strong>Mode local</strong>
+          <span>Connectez-vous pour synchroniser vos appareils.</span>
+          <button class="ghost-btn" id="openAuthBtn">Se connecter</button>
+        </section>
+
         <section class="daily-card">
           <span class="eyebrow">Aujourd'hui</span>
           <strong id="sidebarMinutes">0 min</strong>
@@ -99,6 +106,31 @@
           <button class="ghost-btn" value="cancel">Annuler</button>
           <button class="primary-btn" id="dialogSave" value="default">Enregistrer</button>
         </menu>
+      </form>
+    </dialog>
+
+    <dialog id="authDialog">
+      <form class="dialog-card auth-card" id="authForm">
+        <div class="panel-head">
+          <div>
+            <span class="eyebrow">Chemin Clair</span>
+            <h2 id="authTitle">Connexion</h2>
+          </div>
+          <button class="icon-btn" type="button" id="closeAuthBtn" aria-label="Fermer">x</button>
+        </div>
+        <p class="muted" id="authIntro">Retrouvez vos pratiques et votre progression sur tous vos appareils.</p>
+        <label id="authNameLabel" hidden>Nom
+          <input id="authName" name="name" autocomplete="name">
+        </label>
+        <label>Adresse e-mail
+          <input id="authEmail" name="email" type="email" autocomplete="email" required>
+        </label>
+        <label>Mot de passe
+          <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="8" required>
+        </label>
+        <p class="form-message" id="authMessage" role="status"></p>
+        <button class="primary-btn" id="authSubmit" type="submit">Se connecter</button>
+        <button class="text-btn" id="authModeBtn" type="button">Creer un compte</button>
       </form>
     </dialog>
 

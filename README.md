@@ -14,12 +14,18 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Bibliotheque de guides complets
 - Export des donnees au format JSON
 - Sauvegarde locale dans le navigateur
+- Comptes securises avec session persistante
+- Synchronisation entre appareils
+- Donnees isolees par compte
 
 ## Utilisation
 
-Ouvrez `index.html` dans un navigateur moderne. L'application fonctionne sans serveur, sans compte et sans dependance externe.
+La version publique est deployee sur Vercel. Le mode local reste disponible sans compte; une connexion permet de synchroniser les donnees entre appareils.
+
+## Configuration serveur
+
+Le projet utilise des fonctions Vercel et PostgreSQL. Configurez `DATABASE_URL` dans Vercel. Les tables `cc_users`, `cc_sessions` et `cc_user_state` sont creees automatiquement au premier appel.
 
 ## Respect des traditions
 
 Cette application soutient l'organisation et la regularite. Elle ne remplace pas un enseignant qualifie, une transmission authentique ou les instructions propres a une lignee.
-
