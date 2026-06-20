@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Chemin Clair">
+  <rect width="512" height="512" rx="92" fill="#74283f"/>
+  <circle cx="256" cy="256" r="174" fill="#f3eee7"/>
+  <circle cx="256" cy="256" r="142" fill="none" stroke="#c6943f" stroke-width="12"/>
+  <path d="M170 312c45-18 75-59 86-123 11 64 41 105 86 123-27 8-56 8-86-2-30 10-59 10-86 2Z" fill="#74283f"/>
+  <circle cx="256" cy="172" r="30" fill="#c6943f"/>
+  <path d="M160 342h192" stroke="#74283f" stroke-width="14" stroke-linecap="round"/>
+</svg>
