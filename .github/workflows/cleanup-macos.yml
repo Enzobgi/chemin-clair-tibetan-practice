@@ -20,9 +20,7 @@ jobs:
         shell: bash
         run: |
           find . -name '._*' -type f -delete
-          grep -qxF '._*' .gitignore || printf '
-._*
-' >> .gitignore
+          grep -qxF '._*' .gitignore || echo '._*' >> .gitignore
           rm -f .github/workflows/cleanup-macos.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
