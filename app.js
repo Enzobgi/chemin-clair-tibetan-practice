@@ -1,5 +1,7 @@
 import {
   CURRENT_SCHEMA_VERSION,
+  accumulationPace,
+  accumulationPeriodTotal,
   buildCalendarDays,
   accumulationTotal,
   calculateStreak,
@@ -316,8 +318,10 @@ let toastTimer = null;
 let remoteRevision = 0;
 let focusSession = null;
 let focusInterval = null;
-let journalFilters = { query: "", type: "all", practice: "all", favorite: false, sort: "newest" };
+let journalFilters = { query: "", type: "all", practice: "all", tag: "all", dateFrom: "", dateTo: "", favorite: false, sort: "newest" };
 let statsPeriod = 30;
+let statsPractice = "all";
+let statsCategory = "all";
 let activeAudioUrl = null;
 let reminderInterval = null;
 
@@ -753,8 +757,8 @@ function renderDashboard() {
           </div>
           <button class="primary-btn" id="quickSession">Ajouter une session</button>
         </div>
-        <div class="practice-list">
-          ${state.practices.slice(0, 4).map(practiceRow).join("")}
+        <div class="practice-list dashboard-practice-list">
+          ${state.practices.filter((practice) => !practice.archived).slice(0, 4).map((practice) => practiceRow(practice)).join("")}
         </div>
       </section>
       <section class="panel">
@@ -788,7 +792,7 @@ function practiceRow(p, detailed = false) {
     <button class="primary-btn" data-log-practice="${p.id}">Valider</button>
   `;
   return `
-    <article class="practice-row ${detailed ? "practice-row-detailed" : ""}">
+    <article class="practice-row ${detailed ? "practice-row-detailed" : "practice-row-compact"}">
       <div class="${detailed ? "ritual-card-content" : ""}">
         <div class="row-head">
           <h3>${escapeHtml(p.title)}</h3>
@@ -1176,6 +1180,10 @@ function openRoutineDialog(routine = null) {
     <label>Description <textarea id="routineDescription">${escapeHtml(routine?.description || "Une sequence adaptee a mon rythme.")}</textarea></label>
     <div class="form-grid">
       <label>Heure indicative <input id="routineTime" type="time" value="${escapeAttr(routine?.time || "07:30")}"></label>
+      <label>Historique <select id="routineSaveMode">
+        <option value="steps" ${routine?.saveEachStep !== false ? "selected" : ""}>Chaque etape et resume</option>
+        <option value="summary" ${routine?.saveEachStep === false ? "selected" : ""}>Resume uniquement</option>
+      </select></label>
       <fieldset class="day-picker">
         <legend>Jours</legend>
         ${[["L", 1], ["M", 2], ["M", 3], ["J", 4], ["V", 5], ["S", 6], ["D", 0]].map(([label, value]) => `
@@ -1213,6 +1221,7 @@ function openRoutineDialog(routine = null) {
       time: qs("#routineTime").value,
       days: [...document.querySelectorAll('input[name="routineDay"]:checked')].map((input) => Number(input.value)),
       steps,
+      saveEachStep: qs("#routineSaveMode").value === "steps",
       archived: routine?.archived || false
     };
     if (routine) {
@@ -1242,7 +1251,7 @@ function startRoutine(routine) {
     sourceId: routine.id,
     title: routine.name,
     steps,
-    saveEachStep: true
+    saveEachStep: routine.saveEachStep !== false
   });
 }
 
@@ -1435,7 +1444,8 @@ async function startFocusSession(config) {
     completed: [],
     fontScale: 1,
     dim: false,
-    instructionsVisible: true
+    instructionsVisible: true,
+    textView: "instruction"
   };
   renderFocusMode();
   startFocusTicker();
@@ -1472,6 +1482,16 @@ function renderFocusMode() {
   const host = qs("#focusMode");
   const step = focusSession.steps[focusSession.index];
   const progress = Math.round(((focusSession.index + Math.min(1, focusElapsedSeconds() / Math.max(1, step.durationSeconds))) / focusSession.steps.length) * 100);
+  const textViews = [
+    ["instruction", "Instructions"],
+    ["original", "Original"],
+    ["transliteration", "Transliteration"],
+    ["phonetic", "Phonetique"],
+    ["translation", "Traduction"],
+    ["commentary", "Commentaire"]
+  ].filter(([key]) => step[key]);
+  const activeTextView = textViews.some(([key]) => key === focusSession.textView) ? focusSession.textView : textViews[0]?.[0];
+  const activeText = activeTextView ? step[activeTextView] : "";
   host.hidden = false;
   host.className = `focus-mode ${focusSession.dim ? "is-dim" : ""}`;
   host.style.setProperty("--focus-font-scale", focusSession.fontScale);
@@ -1484,13 +1504,19 @@ function renderFocusMode() {
         <button class="icon-btn" id="focusTextLarger" aria-label="Agrandir le texte">A+</button>
         <button class="icon-btn" id="focusDim" aria-label="Faible luminosite">◐</button>
         <button class="icon-btn" id="focusInstructions" aria-label="Afficher ou masquer les instructions">☷</button>
+        <button class="icon-btn" id="focusFullscreen" aria-label="Plein ecran">⛶</button>
       </div>
     </div>
     <div class="focus-progress"><span style="width:${progress}%"></span></div>
     <main class="focus-content">
       <span class="eyebrow">${focusSession.type === "routine" ? "Routine" : "Rituel guide"}</span>
       <h1>${escapeHtml(step.title)}</h1>
-      ${focusSession.instructionsVisible ? `<p class="focus-instruction">${escapeHtml(step.instruction || "")}</p>` : ""}
+      ${focusSession.instructionsVisible && textViews.length > 1 ? `
+        <div class="focus-text-tabs" role="tablist" aria-label="Versions du texte">
+          ${textViews.map(([key, label]) => `<button class="${activeTextView === key ? "is-active" : ""}" data-focus-text="${key}" role="tab" aria-selected="${activeTextView === key}">${label}</button>`).join("")}
+        </div>
+      ` : ""}
+      ${focusSession.instructionsVisible && activeText ? `<p class="focus-instruction">${escapeHtml(activeText)}</p>` : ""}
       ${step.optional ? `<span class="tag">Etape facultative</span>` : ""}
       ${focusSession.warning ? `<p class="focus-warning">${escapeHtml(focusSession.warning)}</p>` : ""}
       <div class="focus-clock" id="focusClock">${formatTime(Math.max(0, step.durationSeconds - focusElapsedSeconds()))}</div>
@@ -1498,6 +1524,7 @@ function renderFocusMode() {
     <div class="focus-controls">
       <button class="ghost-btn" id="focusPrevious" ${focusSession.index === 0 ? "disabled" : ""}>Precedent</button>
       <button class="primary-btn" id="focusPause">${focusSession.running ? "Pause" : "Reprendre"}</button>
+      ${step.optional ? `<button class="ghost-btn" id="focusSkip">Sauter</button>` : ""}
       <button class="ghost-btn" id="focusNext">${focusSession.index === focusSession.steps.length - 1 ? "Terminer" : "Suivant"}</button>
     </div>
   `;
@@ -1505,6 +1532,15 @@ function renderFocusMode() {
   qs("#focusPrevious").addEventListener("click", () => moveFocusStep(-1));
   qs("#focusNext").addEventListener("click", () => moveFocusStep(1));
   qs("#focusPause").addEventListener("click", toggleFocusPause);
+  qs("#focusSkip")?.addEventListener("click", () => moveFocusStep(1));
+  qs("#focusFullscreen").addEventListener("click", () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else host.requestFullscreen?.();
+  });
+  document.querySelectorAll("[data-focus-text]").forEach((button) => button.addEventListener("click", () => {
+    focusSession.textView = button.dataset.focusText;
+    renderFocusMode();
+  }));
   qs("#focusTextSmaller").addEventListener("click", () => {
     focusSession.fontScale = Math.max(0.85, focusSession.fontScale - 0.1);
     renderFocusMode();
@@ -1639,6 +1675,11 @@ function accumulationCard(item) {
     durationSeconds: Number(entry.count || 0)
   })), 7);
   const weekTotal = recent.reduce((sum, day) => sum + day.seconds, 0);
+  const monthTotal = accumulationPeriodTotal(item, 30);
+  const pace = accumulationPace(item);
+  const paceText = pace.dailyAverage > 0
+    ? `${Math.round(pace.dailyAverage).toLocaleString("fr-FR")} par jour en moyenne${pace.estimatedDaysRemaining ? ` · environ ${pace.estimatedDaysRemaining} jours au rythme actuel` : ""}`
+    : "Le rythme apparaitra apres quelques ajouts.";
   return `
     <article class="accumulation-card">
       <div class="row-head">
@@ -1652,7 +1693,9 @@ function accumulationCard(item) {
         <span><strong>${remaining.toLocaleString("fr-FR")}</strong> restantes</span>
         <span><strong>${percent}%</strong> de l'objectif</span>
         <span><strong>${weekTotal.toLocaleString("fr-FR")}</strong> cette semaine</span>
+        <span><strong>${monthTotal.toLocaleString("fr-FR")}</strong> sur 30 jours</span>
       </div>
+      <p class="muted accumulation-pace">${escapeHtml(paceText)}</p>
       ${item.dailyGoal ? `<p class="muted">Repere quotidien facultatif : ${item.dailyGoal.toLocaleString("fr-FR")}</p>` : ""}
       <div class="quick-adds">
         ${[1, 7, 21, 27, 54, 108].map((count) => `<button class="chip" data-add-accumulation="${item.id}:${count}">+${count}</button>`).join("")}
@@ -1760,7 +1803,15 @@ function openAccumulationDialog(item = null) {
 
 function openAccumulationHistory(item) {
   if (!item) return;
+  const monthly = new Map();
+  (item.entries || []).forEach((entry) => {
+    const month = String(entry.date || "").slice(0, 7);
+    monthly.set(month, (monthly.get(month) || 0) + Number(entry.count || 0));
+  });
   openInfoDialog(`Historique · ${item.name}`, `
+    <div class="compact-list accumulation-months">
+      ${[...monthly.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([month, count]) => `<div><span>${escapeHtml(month)}</span><strong>${count.toLocaleString("fr-FR")}</strong></div>`).join("") || empty("Aucun mois enregistre.")}
+    </div>
     <div class="day-detail-list">
       ${(item.entries || []).slice().reverse().map((entry) => `
         <article class="day-detail-item">
@@ -1776,6 +1827,9 @@ function renderJournal() {
   const filtered = state.journals
     .filter((entry) => journalFilters.type === "all" || entry.type === journalFilters.type)
     .filter((entry) => journalFilters.practice === "all" || entry.practiceId === journalFilters.practice)
+    .filter((entry) => journalFilters.tag === "all" || (entry.tags || []).includes(journalFilters.tag))
+    .filter((entry) => !journalFilters.dateFrom || entry.date >= journalFilters.dateFrom)
+    .filter((entry) => !journalFilters.dateTo || entry.date <= journalFilters.dateTo)
     .filter((entry) => !journalFilters.favorite || entry.favorite)
     .filter((entry) => !query || [
       entry.title,
@@ -1810,6 +1864,12 @@ function renderJournal() {
           <option value="all">Toutes</option>
           ${state.practices.map((practice) => `<option value="${practice.id}" ${journalFilters.practice === practice.id ? "selected" : ""}>${escapeHtml(practice.title)}</option>`).join("")}
         </select></label>
+        <label>Tag <select id="journalTagFilter">
+          <option value="all">Tous</option>
+          ${state.journalTags.map((tag) => `<option value="${escapeAttr(tag.label)}" ${journalFilters.tag === tag.label ? "selected" : ""}>${escapeHtml(tag.label)}</option>`).join("")}
+        </select></label>
+        <label>Du <input id="journalDateFrom" type="date" value="${journalFilters.dateFrom}"></label>
+        <label>Au <input id="journalDateTo" type="date" value="${journalFilters.dateTo}"></label>
         <label>Tri <select id="journalSort">
           <option value="newest">Plus recentes</option>
           <option value="oldest" ${journalFilters.sort === "oldest" ? "selected" : ""}>Plus anciennes</option>
@@ -1832,6 +1892,18 @@ function renderJournal() {
   });
   qs("#journalPracticeFilter").addEventListener("change", (event) => {
     journalFilters.practice = event.target.value;
+    renderJournal();
+  });
+  qs("#journalTagFilter").addEventListener("change", (event) => {
+    journalFilters.tag = event.target.value;
+    renderJournal();
+  });
+  qs("#journalDateFrom").addEventListener("change", (event) => {
+    journalFilters.dateFrom = event.target.value;
+    renderJournal();
+  });
+  qs("#journalDateTo").addEventListener("change", (event) => {
+    journalFilters.dateTo = event.target.value;
     renderJournal();
   });
   qs("#journalFavoriteFilter").addEventListener("change", (event) => {
@@ -2462,11 +2534,12 @@ function renderStats() {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - statsPeriod + 1);
   cutoff.setHours(0, 0, 0, 0);
-  const selectedPractice = qs("#statsPractice")?.value || "all";
+  const practiceCategory = new Map(state.practices.map((practice) => [practice.title, practice.category || "Autre"]));
   const sessions = state.sessions.filter((session) => {
     const inPeriod = new Date(`${session.date}T12:00:00`) >= cutoff;
-    const matches = selectedPractice === "all" || session.label === selectedPractice;
-    return inPeriod && matches && !session.summaryOnly;
+    const matchesPractice = statsPractice === "all" || session.label === statsPractice;
+    const matchesCategory = statsCategory === "all" || practiceCategory.get(session.label) === statsCategory;
+    return inPeriod && matchesPractice && matchesCategory && !session.summaryOnly;
   });
   const totalSeconds = sumSessionSeconds(sessions);
   const average = sessions.length ? totalSeconds / sessions.length : 0;
@@ -2487,10 +2560,29 @@ function renderStats() {
     obstacles.set(entry.obstacle, (obstacles.get(entry.obstacle) || 0) + 1);
   });
   const heatmap = sessionsByDay(state.sessions, 90);
+  const byMonth = new Map();
+  const byWeekday = new Map();
+  sessions.forEach((session) => {
+    const month = session.date.slice(0, 7);
+    const weekday = new Date(`${session.date}T12:00:00`).getDay();
+    byMonth.set(month, (byMonth.get(month) || 0) + sessionDurationSeconds(session));
+    byWeekday.set(weekday, (byWeekday.get(weekday) || 0) + sessionDurationSeconds(session));
+  });
+  const monthRows = [...byMonth.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-12);
+  const weekdayNames = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+  const regularDay = [...byWeekday.entries()].sort((a, b) => b[1] - a[1])[0];
+  const routineSessions = sessions.filter((session) => session.routineId && !session.summaryOnly);
+  const routineCounts = new Map();
+  routineSessions.forEach((session) => {
+    const routine = state.routines.find((item) => item.id === session.routineId);
+    const label = routine?.name || "Routine archivee";
+    routineCounts.set(label, (routineCounts.get(label) || 0) + 1);
+  });
   qs("#stats").innerHTML = `
     <section class="panel">
       <div class="section-head">
         <div><span class="eyebrow">Observation personnelle</span><h2>Statistiques de pratique</h2></div>
+        <button class="ghost-btn" id="exportStatsCsv">Exporter CSV</button>
         <div class="filter-bar compact-filter">
           <label>Periode <select id="statsPeriod">
             <option value="7" ${statsPeriod === 7 ? "selected" : ""}>7 jours</option>
@@ -2500,7 +2592,11 @@ function renderStats() {
           </select></label>
           <label>Pratique <select id="statsPractice">
             <option value="all">Toutes</option>
-            ${[...new Set(state.sessions.map((session) => session.label))].sort().map((label) => `<option ${selectedPractice === label ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+            ${[...new Set(state.sessions.map((session) => session.label))].sort().map((label) => `<option ${statsPractice === label ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}
+          </select></label>
+          <label>Categorie <select id="statsCategory">
+            <option value="all">Toutes</option>
+            ${[...new Set(state.practices.map((practice) => practice.category || "Autre"))].sort().map((category) => `<option ${statsCategory === category ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}
           </select></label>
         </div>
       </div>
@@ -2509,8 +2605,25 @@ function renderStats() {
         ${metric("Sessions", sessions.length, "sans comparaison")}
         ${metric("Duree moyenne", formatDuration(average), "par session")}
         ${metric("Horaire frequent", commonHour === undefined ? "—" : `${String(commonHour).padStart(2, "0")} h`, "selon les sessions datees")}
+        ${metric("Jour regulier", regularDay ? weekdayNames[regularDay[0]] : "—", "temps cumule sur la periode")}
       </div>
     </section>
+    <div class="two-col">
+      <section class="panel">
+        <span class="eyebrow">Vue mensuelle</span>
+        <h2>Temps par mois</h2>
+        <div class="compact-list">
+          ${monthRows.map(([month, seconds]) => `<div><span>${escapeHtml(month)}</span><strong>${formatDuration(seconds)}</strong></div>`).join("") || empty("Pas encore de donnees mensuelles.")}
+        </div>
+      </section>
+      <section class="panel">
+        <span class="eyebrow">Routines</span>
+        <h2>Historique execute</h2>
+        <div class="compact-list">
+          ${[...routineCounts.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => `<div><span>${escapeHtml(label)}</span><strong>${count} etape${count > 1 ? "s" : ""}</strong></div>`).join("") || empty("Aucune routine sur cette periode.")}
+        </div>
+      </section>
+    </div>
     <section class="panel">
       <span class="eyebrow">Rythme quotidien</span>
       <h2>Minutes par jour</h2>
@@ -2551,7 +2664,15 @@ function renderStats() {
     statsPeriod = Number(event.target.value);
     renderStats();
   });
-  qs("#statsPractice").addEventListener("change", renderStats);
+  qs("#statsPractice").addEventListener("change", (event) => {
+    statsPractice = event.target.value;
+    renderStats();
+  });
+  qs("#statsCategory").addEventListener("change", (event) => {
+    statsCategory = event.target.value;
+    renderStats();
+  });
+  qs("#exportStatsCsv").addEventListener("click", () => exportStatisticsCsv(sessions));
 }
 
 function renderSettings() {
@@ -2777,10 +2898,19 @@ function openSessionDialog(date = todayKey(), session = null) {
 
 function openPracticeDialog(practice = null) {
   const stepsText = practice
-    ? (practice.detailedSteps || []).map((step) => `${step.title} | ${step.instruction || ""}`).join("\n")
-    : `Preparation | Stabiliser le corps et poser l'intention.
-Pratique principale | Suivre les instructions personnelles autorisees avec attention.
-Dedication | Reposer l'esprit et dedier les bienfaits.`;
+    ? (practice.detailedSteps || []).map((step) => [
+        step.title,
+        step.duration || "",
+        step.instruction || "",
+        step.original || "",
+        step.transliteration || "",
+        step.phonetic || "",
+        step.translation || "",
+        step.commentary || ""
+      ].join(" | ")).join("\n")
+    : `Preparation | 2 min | Stabiliser le corps et poser l'intention. | | | | |
+Pratique principale | 6 min | Suivre les instructions personnelles autorisees avec attention. | | | | |
+Dedication | 2 min | Reposer l'esprit et dedier les bienfaits. | | | | |`;
   openDialog(practice ? "Modifier la pratique" : "Nouvelle pratique", `
     <label>Titre <input id="practiceTitle" value="${escapeAttr(practice?.title || "Nouvelle pratique")}" required></label>
     <div class="form-grid">
@@ -2789,24 +2919,40 @@ Dedication | Reposer l'esprit et dedier les bienfaits.`;
     </div>
     <label>But de la pratique <textarea id="practicePurpose">${escapeHtml(practice?.purpose || "Clarifier l'intention de cette pratique personnelle.")}</textarea></label>
     <label>Preparation <textarea id="practicePreparation">${escapeHtml(practice?.preparation || "Preparer un espace calme, regler le minuteur et adopter une posture stable.")}</textarea></label>
-    <label>Etapes detaillees, une par ligne au format Titre | Instructions
+    <label>Etapes detaillees
       <textarea id="practiceSteps">${escapeHtml(stepsText)}</textarea>
+      <span class="field-help">Une ligne par etape : Titre | duree | instructions | original | translitteration | phonetique | traduction | commentaire. Les champs apres les instructions sont facultatifs.</span>
     </label>
     <label>Cloture <textarea id="practiceClosing">${escapeHtml(practice?.closing || "Terminer par quelques respirations calmes avant de se lever.")}</textarea></label>
     <label>Point d'attention <textarea id="practiceCaution">${escapeHtml(practice?.caution || "Adapter la pratique a sa situation et aux instructions de son enseignant.")}</textarea></label>
     <label>Resume <textarea id="practiceNotes">${escapeHtml(practice?.notes || "Sequence personnelle a utiliser dans le respect des transmissions recues.")}</textarea></label>
   `, () => {
+    const previousSteps = practice?.detailedSteps || [];
+    const usedStepIds = new Set();
     const detailedSteps = qs("#practiceSteps").value
       .split("\n")
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((line) => {
-        const [title, ...instructionParts] = line.split("|");
-        return {
-          title: title.trim(),
-          duration: "",
-          instruction: instructionParts.join("|").trim() || "Accomplir cette etape avec attention."
+      .map((line, index) => {
+        const [title, duration, instruction, original, transliteration, phonetic, translation, commentary] = line.split("|").map((part) => part.trim());
+        const values = {
+          title: title || "Etape",
+          duration: duration || "",
+          instruction: instruction || "Accomplir cette etape avec attention.",
+          original: original || "",
+          transliteration: transliteration || "",
+          phonetic: phonetic || "",
+          translation: translation || "",
+          commentary: commentary || ""
         };
+        const existing = previousSteps[index]?.title === values.title
+          ? previousSteps[index]
+          : previousSteps.find((step) => step.title === values.title && !usedStepIds.has(step.id));
+        if (!existing) return newRecord(values);
+        usedStepIds.add(existing.id);
+        const next = { ...existing, ...values };
+        if (Object.keys(values).some((key) => existing[key] !== values[key])) markUpdated(next, Object.keys(values));
+        return next;
       });
     const values = {
       title: qs("#practiceTitle").value,
@@ -2821,6 +2967,7 @@ Dedication | Reposer l'esprit et dedier les bienfaits.`;
       notes: qs("#practiceNotes").value
     };
     if (practice) {
+      recordNestedDeletions(state, "practices.detailedSteps", practice.detailedSteps || [], detailedSteps);
       Object.assign(practice, values);
       markUpdated(practice, Object.keys(values));
     } else {
@@ -3096,6 +3243,24 @@ function exportSessionsCsv() {
     ])
   ];
   downloadFile(`chemin-clair-sessions-${todayKey()}.csv`, rows.map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv;charset=utf-8");
+}
+
+function exportStatisticsCsv(sessions) {
+  const rows = [
+    ["date", "pratique", "categorie", "duree_secondes", "routine"],
+    ...sessions.map((session) => {
+      const practice = state.practices.find((item) => item.title === session.label);
+      const routine = state.routines.find((item) => item.id === session.routineId);
+      return [
+        session.date,
+        session.label,
+        practice?.category || "",
+        sessionDurationSeconds(session),
+        routine?.name || ""
+      ];
+    })
+  ];
+  downloadFile(`chemin-clair-statistiques-${todayKey()}.csv`, rows.map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv;charset=utf-8");
 }
 
 function exportAccumulationsCsv() {

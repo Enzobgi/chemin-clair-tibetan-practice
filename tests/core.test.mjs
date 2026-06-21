@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   CURRENT_SCHEMA_VERSION,
+  accumulationPace,
+  accumulationPeriodTotal,
   accumulationTotal,
   buildCalendarDays,
   calculateStreak,
@@ -289,6 +291,22 @@ test("les accumulations totalisent les corrections et les ajouts", () => {
   assert.equal(accumulationTotal({ entries: [{ count: 108 }, { count: 21 }, { count: -1 }] }), 128);
 });
 
+test("les accumulations calculent les periodes et une estimation prudente", () => {
+  const accumulation = {
+    startDate: "2026-06-01",
+    target: 1000,
+    entries: [
+      { date: "2026-06-01", count: 100 },
+      { date: "2026-06-15", count: 200 },
+      { date: "2026-06-20", count: 100 }
+    ]
+  };
+  assert.equal(accumulationPeriodTotal(accumulation, 7, new Date("2026-06-21T12:00:00")), 300);
+  const pace = accumulationPace(accumulation, new Date("2026-06-20T12:00:00"));
+  assert.equal(pace.dailyAverage, 20);
+  assert.equal(pace.estimatedDaysRemaining, 30);
+});
+
 test("les statistiques quotidiennes creent une serie continue de dates", () => {
   const days = sessionsByDay([{ date: "2026-06-20", durationSeconds: 60 }], 3, new Date("2026-06-20T12:00:00"));
   assert.deepEqual(days.map((day) => day.date), ["2026-06-18", "2026-06-19", "2026-06-20"]);
@@ -358,6 +376,22 @@ test("la migration version 5 enrichit le journal sans perdre les anciennes notes
   assert.equal(migrated.journalTags[0].label, "calme");
 });
 
+test("la migration version 7 rend les etapes de rituel synchronisables", () => {
+  const migrated = migrateState({
+    sessions: [],
+    journals: [],
+    practices: [{
+      id: "practice",
+      title: "Rituel",
+      detailedSteps: [{ title: "Refuge", instruction: "Texte" }]
+    }]
+  }, defaults);
+  assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
+  assert.ok(migrated.practices[0].detailedSteps[0].id);
+  assert.ok(migrated.practices[0].detailedSteps[0].updatedAt);
+  assert.equal(migrated.practices[0].detailedSteps[0].translation, "");
+});
+
 test("le service worker exclut les API du cache", async () => {
   const worker = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(worker, /url\.pathname\.startsWith\("\/api\/"\)/);
@@ -401,4 +435,28 @@ test("les fiches de rituel gardent une largeur lisible sur ordinateur", async ()
   assert.match(script, /class="button-row ritual-management"/);
   assert.match(styles, /\.practice-row-detailed\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
   assert.match(styles, /\.ritual-step-preview\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});
+
+test("la priorite 2 expose les controles guides et les nouveaux filtres", async () => {
+  const [script, styles] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8")
+  ]);
+  assert.match(script, /id="focusFullscreen"/);
+  assert.match(script, /data-focus-text/);
+  assert.match(script, /id="focusSkip"/);
+  assert.match(script, /id="journalTagFilter"/);
+  assert.match(script, /id="statsCategory"/);
+  assert.match(script, /exportStatisticsCsv/);
+  assert.match(styles, /\.focus-text-tabs/);
+});
+
+test("les pratiques recommandees restent compactes sur le tableau de bord", async () => {
+  const [script, styles] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8")
+  ]);
+  assert.match(script, /\.map\(\(practice\) => practiceRow\(practice\)\)/);
+  assert.match(script, /practice-row-compact/);
+  assert.match(styles, /\.dashboard-practice-list \.practice-row-compact/);
 });

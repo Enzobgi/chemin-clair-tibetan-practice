@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -73,6 +73,31 @@ export function routineDurationSeconds(routine) {
 
 export function accumulationTotal(accumulation) {
   return (accumulation.entries || []).reduce((sum, entry) => sum + Number(entry.count || 0), 0);
+}
+
+export function accumulationPeriodTotal(accumulation, days = 7, end = new Date()) {
+  const endDate = new Date(end);
+  endDate.setHours(23, 59, 59, 999);
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - Math.max(1, Number(days || 1)) + 1);
+  startDate.setHours(0, 0, 0, 0);
+  return (accumulation.entries || []).reduce((sum, entry) => {
+    const date = new Date(`${entry.date}T12:00:00`);
+    return date >= startDate && date <= endDate ? sum + Number(entry.count || 0) : sum;
+  }, 0);
+}
+
+export function accumulationPace(accumulation, end = new Date()) {
+  const positiveEntries = (accumulation.entries || []).filter((entry) => Number(entry.count || 0) > 0);
+  const start = accumulation.startDate || positiveEntries.map((entry) => entry.date).sort()[0];
+  if (!start) return { dailyAverage: 0, estimatedDaysRemaining: null };
+  const elapsedDays = Math.max(1, Math.floor((new Date(end) - new Date(`${start}T00:00:00`)) / 86400000) + 1);
+  const dailyAverage = positiveEntries.reduce((sum, entry) => sum + Number(entry.count || 0), 0) / elapsedDays;
+  const remaining = Math.max(0, Number(accumulation.target || 0) - accumulationTotal(accumulation));
+  return {
+    dailyAverage,
+    estimatedDaysRemaining: dailyAverage > 0 && remaining > 0 ? Math.ceil(remaining / dailyAverage) : null
+  };
 }
 
 export function sessionsByDay(sessions, days = 7, end = new Date()) {
@@ -150,7 +175,17 @@ export function migrateState(input, defaults) {
     practices: (Array.isArray(source.practices) ? source.practices : defaults.practices)
       .map((practice) => normalizeRecord({
           ...practice,
-          archived: Boolean(practice.archived)
+          archived: Boolean(practice.archived),
+          detailedSteps: Array.isArray(practice.detailedSteps)
+            ? practice.detailedSteps.map((step) => normalizeRecord({
+                original: "",
+                transliteration: "",
+                phonetic: "",
+                translation: "",
+                commentary: "",
+                ...step
+              }, "practice-step", now))
+            : []
         }, "practice", now)),
     deletedItems: Array.isArray(source.deletedItems)
       ? source.deletedItems.map((item) => normalizeTombstone(item, now))
@@ -384,7 +419,16 @@ export function mergeImportedState(current, imported, defaults) {
     sessions: applyTombstones(mergeById(currentNormalized.sessions, normalized.sessions), "sessions", deletedItems),
     journals: applyTombstones(mergeById(currentNormalized.journals, normalized.journals), "journals", deletedItems),
     journalTags: applyTombstones(mergeById(currentNormalized.journalTags, normalized.journalTags), "journalTags", deletedItems),
-    practices: applyTombstones(mergeById(currentNormalized.practices, normalized.practices), "practices", deletedItems),
+    practices: applyNestedTombstones(
+      applyTombstones(
+        mergeById(currentNormalized.practices, normalized.practices, (left, right) => mergeNestedRecords(left, right, ["detailedSteps"])),
+        "practices",
+        deletedItems
+      ),
+      "practices",
+      "detailedSteps",
+      deletedItems
+    ),
     accumulations: applyNestedTombstones(
       applyTombstones(
         mergeById(currentNormalized.accumulations, normalized.accumulations, (left, right) => mergeNestedRecords(left, right, ["entries"])),

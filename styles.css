@@ -884,6 +884,40 @@ menu {
   line-height: 1.75;
 }
 
+.focus-text-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.focus-text-tabs button {
+  min-height: 38px;
+  padding: 7px 10px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+.focus-text-tabs button.is-active {
+  background: var(--maroon);
+  border-color: var(--maroon);
+  color: #fffaf0;
+  opacity: 1;
+}
+
+.accumulation-pace {
+  min-height: 2.8em;
+}
+
+.accumulation-months {
+  margin-bottom: 18px;
+}
+
 .focus-clock {
   font-size: calc(3.4rem * var(--focus-font-scale));
   font-weight: 900;
@@ -1004,6 +1038,35 @@ menu {
   gap: 12px;
   padding: 14px;
   align-items: center;
+}
+
+.dashboard-practice-list .practice-row-compact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.practice-row-compact .row-head {
+  align-items: flex-start;
+}
+
+.practice-row-compact > div:first-child {
+  min-width: 0;
+}
+
+.practice-row-compact > .button-row {
+  justify-content: flex-start;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.practice-row-compact > .button-row button {
+  flex: 1 1 120px;
+}
+
+.practice-row-compact .tag-row {
+  max-height: 58px;
+  overflow: hidden;
 }
 
 .practice-row-detailed {

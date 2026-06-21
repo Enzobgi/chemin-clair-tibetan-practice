@@ -8,12 +8,16 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Minuteur de meditation avec cloche
 - Compteur de mantras et cycles de mala
 - Rituels detailles pas a pas
+- Mode guide plein ecran avec variantes original, translitteration, phonetique et traduction
 - Creation de pratiques personnelles
+- Routines configurables avec etapes facultatives et choix du mode d'historique
 - Journal de pratique
 - Journal enrichi avec revues hebdomadaires, recherche, filtres et images privees
 - Calendrier et suivi des series
 - Bibliotheque de guides complets
 - Retraites, accumulations, calendrier tibetain, audio et rappels
+- Analyses hebdomadaires et mensuelles des accumulations
+- Statistiques filtrables par pratique et categorie avec export CSV
 - Themes clair et sombre, contraste renforce et tailles de texte
 - Export des donnees au format JSON
 - Sauvegarde locale dans le navigateur
