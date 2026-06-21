@@ -20,6 +20,7 @@ import {
   sumSessionSeconds,
   validateBackup
 } from "./core.js";
+import { buildTibetanCalendar, TIBETAN_CALENDAR_SOURCES } from "./tibetan-calendar.js";
 
 const STORAGE_KEY = "chemin-clair-state-v1";
 const TIMER_STORAGE_SUFFIX = "active-timer";
@@ -322,6 +323,8 @@ let journalFilters = { query: "", type: "all", practice: "all", tag: "all", date
 let statsPeriod = 30;
 let statsPractice = "all";
 let statsCategory = "all";
+let tibetanCalendarYear = new Date().getFullYear();
+let tibetanCalendarType = "all";
 let activeAudioUrl = null;
 let reminderInterval = null;
 
@@ -713,7 +716,8 @@ function renderDashboard() {
   const todayDay = new Date().getDay();
   const todayRoutine = state.routines.find((routine) => !routine.archived && (!routine.days?.length || routine.days.includes(todayDay)));
   const activeAccumulation = state.accumulations.find((item) => !item.archived);
-  const todayEvent = state.calendarEvents.find((event) => event.date === todayKey());
+  const todayEvent = [...state.calendarEvents, ...buildTibetanCalendar(new Date().getFullYear())]
+    .find((event) => event.date === todayKey());
   const activeRetreat = state.retreats.find((retreat) => !retreat.archived && retreat.startDate <= todayKey() && retreat.endDate >= todayKey());
   qs("#dashboard").innerHTML = `
     <div class="metrics-grid">
@@ -2407,18 +2411,55 @@ function ringBellTone(frequency, duration) {
 
 function renderTibetanCalendar() {
   const profile = state.settings.tibetanCalendarProfile || "personnalise";
-  const events = state.calendarEvents.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const builtInEvents = buildTibetanCalendar(tibetanCalendarYear).filter((event) => {
+    if (profile === "Bon") return event.type === "Phase lunaire";
+    if (event.tradition === "Gelug") return profile === "Gelug";
+    return true;
+  });
+  const personalEvents = state.calendarEvents.filter((event) => String(event.date).startsWith(String(tibetanCalendarYear)));
+  const eventTypes = [...new Set([...builtInEvents, ...personalEvents].map((event) => event.type))].sort();
+  const events = [...builtInEvents, ...personalEvents]
+    .filter((event) => tibetanCalendarType === "all" || event.type === tibetanCalendarType)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.name).localeCompare(String(b.name)));
   qs("#tibetanCalendar").innerHTML = `
     <section class="panel">
       <div class="section-head"><div><span class="eyebrow">Calendrier optionnel</span><h2>Calendrier tibetain</h2></div><button class="primary-btn" id="addCalendarEvent">Ajouter un evenement</button></div>
-      <label>Profil <select id="calendarProfile">${["Nyingma", "Karma Kagyu", "Gelug", "Sakya", "Bon", "personnalise"].map((value) => `<option ${profile === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
-      <p class="detail-caution">Les dates peuvent varier selon les calendriers et les lignees. Seuls vos evenements saisis ou clairement sources sont affiches.</p>
-      <div class="event-list">${events.map(calendarEventCard).join("") || empty("Aucune date ajoutee. L'application n'invente pas de dates traditionnelles.")}</div>
+      <div class="calendar-source-toolbar">
+        <label>Profil <select id="calendarProfile">${["Nyingma", "Karma Kagyu", "Gelug", "Sakya", "Bon", "personnalise"].map((value) => `<option ${profile === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+        <label>Type <select id="tibetanEventType"><option value="all">Tous</option>${eventTypes.map((type) => `<option value="${escapeAttr(type)}" ${tibetanCalendarType === type ? "selected" : ""}>${escapeHtml(type)}</option>`).join("")}</select></label>
+        <div class="calendar-year-controls">
+          <button class="icon-btn" id="previousTibetanYear" aria-label="Annee precedente">←</button>
+          <strong>${tibetanCalendarYear}</strong>
+          <button class="icon-btn" id="nextTibetanYear" aria-label="Annee suivante">→</button>
+          <button class="ghost-btn" id="currentTibetanYear">Aujourd'hui</button>
+        </div>
+      </div>
+      <p class="detail-caution">Base Phukpa avec reperes lunaires calcules. Les jours marques « date calculee » peuvent differer selon le fuseau, les jours omis ou doubles et la tradition Tsurluk. Le profil Bon affiche uniquement les phases astronomiques et vos dates personnelles.</p>
+      <div class="calendar-sources">
+        ${Object.values(TIBETAN_CALENDAR_SOURCES).map((source) => `<a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.name)}</a>`).join("")}
+      </div>
+      <div class="event-list">${events.map(calendarEventCard).join("") || empty("Aucune date disponible pour ce filtre.")}</div>
     </section>
   `;
   qs("#calendarProfile").addEventListener("change", (event) => {
     state.settings.tibetanCalendarProfile = event.target.value;
     saveState();
+  });
+  qs("#tibetanEventType").addEventListener("change", (event) => {
+    tibetanCalendarType = event.target.value;
+    renderTibetanCalendar();
+  });
+  qs("#previousTibetanYear").addEventListener("click", () => {
+    tibetanCalendarYear -= 1;
+    renderTibetanCalendar();
+  });
+  qs("#nextTibetanYear").addEventListener("click", () => {
+    tibetanCalendarYear += 1;
+    renderTibetanCalendar();
+  });
+  qs("#currentTibetanYear").addEventListener("click", () => {
+    tibetanCalendarYear = new Date().getFullYear();
+    renderTibetanCalendar();
   });
   qs("#addCalendarEvent").addEventListener("click", () => openCalendarEventDialog());
   document.querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openCalendarEventDialog(state.calendarEvents.find((item) => item.id === button.dataset.editEvent))));
@@ -2426,7 +2467,7 @@ function renderTibetanCalendar() {
 }
 
 function calendarEventCard(event) {
-  return `<article class="event-card"><div><span class="tag">${escapeHtml(event.tradition || "Personnalise")}</span><h3>${escapeHtml(event.name)}</h3><p>${event.date} · ${escapeHtml(event.explanation || "")}</p>${safeExternalUrl(event.source) ? `<a href="${escapeAttr(safeExternalUrl(event.source))}" target="_blank" rel="noopener">Source</a>` : ""}</div><div class="button-row"><button class="ghost-btn" data-edit-event="${event.id}">Modifier</button><button class="icon-btn danger-btn" data-delete-event="${event.id}" aria-label="Supprimer">×</button></div></article>`;
+  return `<article class="event-card ${event.builtIn ? "is-calendar-source" : ""}"><div><div class="tag-row"><span class="tag">${escapeHtml(event.tradition || "Personnalise")}</span><span class="tag">${escapeHtml(event.type || "Evenement")}</span>${event.calculated ? `<span class="tag">Date calculee</span>` : ""}</div><h3>${escapeHtml(event.name)}</h3><p><strong>${formatDisplayDate(event.date, { weekday: "long" })}</strong> · ${escapeHtml(event.explanation || "")}</p>${event.suggestedPractice ? `<p class="muted">${escapeHtml(event.suggestedPractice)}</p>` : ""}${safeExternalUrl(event.source) ? `<a href="${escapeAttr(safeExternalUrl(event.source))}" target="_blank" rel="noopener">${escapeHtml(event.sourceName || "Source")}</a>` : ""}</div>${event.builtIn ? "" : `<div class="button-row"><button class="ghost-btn" data-edit-event="${event.id}">Modifier</button><button class="icon-btn danger-btn" data-delete-event="${event.id}" aria-label="Supprimer">×</button></div>`}</article>`;
 }
 
 function openCalendarEventDialog(event = null) {

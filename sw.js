@@ -1,10 +1,11 @@
-const CACHE_NAME = "chemin-clair-v10";
+const CACHE_NAME = "chemin-clair-v11";
 const CORE_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
   "./core.js",
+  "./tibetan-calendar.js",
   "./manifest.webmanifest",
   "./assets/hero-shrine.png",
   "./assets/icon.svg"

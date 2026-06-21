@@ -541,6 +541,40 @@ menu {
   margin-top: 18px;
 }
 
+.calendar-source-toolbar {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.8fr) minmax(160px, 0.8fr) minmax(280px, 1.4fr);
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.calendar-year-controls,
+.calendar-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-year-controls strong {
+  min-width: 56px;
+  text-align: center;
+}
+
+.calendar-sources {
+  margin: 14px 0 20px;
+  font-size: 0.84rem;
+}
+
+.calendar-sources a {
+  color: var(--maroon);
+}
+
+.event-card.is-calendar-source {
+  border-left: 4px solid var(--gold);
+}
+
 .retreat-mode {
   display: grid;
   gap: 18px;
@@ -1799,7 +1833,8 @@ menu {
 
   .filter-bar,
   .compact-filter,
-  .accumulation-stats {
+  .accumulation-stats,
+  .calendar-source-toolbar {
     grid-template-columns: 1fr;
   }
 

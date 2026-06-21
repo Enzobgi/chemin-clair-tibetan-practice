@@ -21,6 +21,7 @@ import {
   sumSessionSeconds,
   validateBackup
 } from "../core.js";
+import { buildTibetanCalendar, TIBETAN_CALENDAR_SOURCES } from "../tibetan-calendar.js";
 
 const defaults = {
   schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -449,6 +450,30 @@ test("la priorite 2 expose les controles guides et les nouveaux filtres", async 
   assert.match(script, /id="statsCategory"/);
   assert.match(script, /exportStatisticsCsv/);
   assert.match(styles, /\.focus-text-tabs/);
+});
+
+test("le calendrier tibetain 2026 contient des dates reelles et sourcees", () => {
+  const events = buildTibetanCalendar(2026);
+  const losar = events.find((event) => event.name === "Losar 2153");
+  assert.equal(losar.date, "2026-02-18");
+  assert.equal(losar.calculated, false);
+  assert.ok(events.some((event) => event.name === "Saga Dawa Düchen"));
+  assert.ok(events.some((event) => event.name === "Jour de Guru Rinpoché"));
+  assert.ok(events.some((event) => event.name === "Pleine lune"));
+  assert.equal(new Set(events.map((event) => event.id)).size, events.length);
+  assert.match(TIBETAN_CALENDAR_SOURCES.mathematics.url, /^https:/);
+});
+
+test("l'interface distingue les dates sourcees des evenements personnels", async () => {
+  const [script, worker] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../sw.js", import.meta.url), "utf8")
+  ]);
+  assert.match(script, /buildTibetanCalendar/);
+  assert.match(script, /Date calculee/);
+  assert.match(script, /event\.builtIn \? ""/);
+  assert.match(script, /id="previousTibetanYear"/);
+  assert.match(worker, /tibetan-calendar\.js/);
 });
 
 test("les pratiques recommandees restent compactes sur le tableau de bord", async () => {

@@ -16,6 +16,7 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Calendrier et suivi des series
 - Bibliotheque de guides complets
 - Retraites, accumulations, calendrier tibetain, audio et rappels
+- Calendrier tibetain Phukpa source avec phases lunaires, jours de pratique et grands Duchen
 - Analyses hebdomadaires et mensuelles des accumulations
 - Statistiques filtrables par pratique et categorie avec export CSV
 - Themes clair et sombre, contraste renforce et tailles de texte
