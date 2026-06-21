@@ -196,3 +196,16 @@ test("la suppression de compte reverifie le mot de passe cote serveur", async ()
   assert.match(endpoint, /DELETE FROM cc_users/);
   assert.match(endpoint, /clearSession/);
 });
+
+test("la navigation responsive utilise un tiroir lateral accessible", async () => {
+  const [html, script, styles] = await Promise.all([
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8")
+  ]);
+  assert.match(html, /aria-controls="mainSidebar"/);
+  assert.match(script, /setSidebarOpen/);
+  assert.match(script, /event\.key === "Escape"/);
+  assert.match(styles, /\.menu-tab/);
+  assert.match(styles, /body\.sidebar-open \.sidebar/);
+});
