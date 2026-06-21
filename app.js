@@ -321,6 +321,37 @@ let activeAudioUrl = null;
 let reminderInterval = null;
 
 const qs = (selector) => document.querySelector(selector);
+const drawerMedia = window.matchMedia("(max-width: 1120px)");
+
+function setSidebarOpen(open, { restoreFocus = false } = {}) {
+  const sidebar = qs("#mainSidebar");
+  const tab = qs("#menuTab");
+  const backdrop = qs("#sidebarBackdrop");
+  if (!sidebar || !tab || !backdrop) return;
+  const drawerMode = drawerMedia.matches;
+  const shouldOpen = drawerMode && open;
+  document.body.classList.toggle("sidebar-open", shouldOpen);
+  tab.setAttribute("aria-expanded", String(shouldOpen));
+  tab.setAttribute("aria-label", shouldOpen ? "Fermer le menu" : "Ouvrir le menu");
+  backdrop.hidden = !shouldOpen;
+  sidebar.inert = drawerMode && !shouldOpen;
+  if (shouldOpen) {
+    requestAnimationFrame(() => sidebar.querySelector(".nav-btn.is-active, .nav-btn")?.focus());
+  } else if (restoreFocus && drawerMode) {
+    tab.focus();
+  }
+}
+
+function syncSidebarMode() {
+  if (drawerMedia.matches) {
+    setSidebarOpen(false);
+  } else {
+    document.body.classList.remove("sidebar-open");
+    qs("#mainSidebar").inert = false;
+    qs("#sidebarBackdrop").hidden = true;
+    qs("#menuTab").setAttribute("aria-expanded", "false");
+  }
+}
 
 function applyPreferences() {
   const settings = state.settings || {};
@@ -603,6 +634,7 @@ function setView(view) {
   document.querySelectorAll(".view").forEach((el) => el.classList.toggle("is-active", el.id === view));
   document.querySelectorAll(".nav-btn").forEach((el) => el.classList.toggle("is-active", el.dataset.view === view));
   renderView();
+  if (drawerMedia.matches) setSidebarOpen(false);
 }
 
 function renderNav() {
@@ -3346,6 +3378,18 @@ renderAccountPanel();
 qs("#closeAuthBtn").addEventListener("click", () => qs("#authDialog").close());
 qs("#authModeBtn").addEventListener("click", () => openAuthDialog(authMode === "login" ? "register" : "login"));
 qs("#authForm").addEventListener("submit", submitAuth);
+qs("#menuTab").addEventListener("click", () => setSidebarOpen(true));
+qs("#closeSidebarBtn").addEventListener("click", () => setSidebarOpen(false, { restoreFocus: true }));
+qs("#sidebarBackdrop").addEventListener("click", () => setSidebarOpen(false, { restoreFocus: true }));
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.body.classList.contains("sidebar-open")) {
+    setSidebarOpen(false, { restoreFocus: true });
+  }
+});
+
+drawerMedia.addEventListener?.("change", syncSidebarMode);
+syncSidebarMode();
 
 window.addEventListener("focus", () => {
   if (currentUser) restoreRemoteState({ importLocalWhenEmpty: false });
