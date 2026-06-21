@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -120,8 +120,17 @@ export function migrateState(input, defaults) {
           type: entry.type || "quick",
           tags: Array.isArray(entry.tags) ? entry.tags : [],
           favorite: Boolean(entry.favorite),
+          agitation: entry.agitation || "non precisee",
+          torpor: entry.torpor || "non precisee",
+          clarity: entry.clarity || "non precisee",
+          emotion: entry.emotion || "",
+          sessionId: entry.sessionId || "",
+          image: entry.image && typeof entry.image === "object" ? entry.image : null,
           ...entry
         }, "journal", now))
+      : [],
+    journalTags: Array.isArray(source.journalTags)
+      ? source.journalTags.map((tag) => normalizeRecord(tag, "journal-tag", now))
       : [],
     practices: (Array.isArray(source.practices) ? source.practices : defaults.practices)
       .map((practice) => normalizeRecord({
@@ -189,7 +198,7 @@ export function validateBackup(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { valid: false, errors: ["La racine doit etre un objet JSON."] };
   }
-  const arrayFields = ["sessions", "journals", "practices", "routines", "accumulations", "retreats", "libraryItems", "audioItems", "reminders", "calendarEvents"];
+  const arrayFields = ["sessions", "journals", "journalTags", "practices", "routines", "accumulations", "retreats", "libraryItems", "audioItems", "reminders", "calendarEvents"];
   for (const field of arrayFields) {
     if (value[field] !== undefined && !Array.isArray(value[field])) {
       errors.push(`Le champ ${field} doit etre une liste.`);
@@ -245,6 +254,7 @@ export function mergeImportedState(current, imported, defaults) {
     settings: { ...current.settings, ...normalized.settings },
     sessions: mergeById(current.sessions, normalized.sessions),
     journals: mergeById(current.journals, normalized.journals),
+    journalTags: mergeById(current.journalTags, normalized.journalTags),
     practices: mergeById(current.practices, normalized.practices),
     deletedItems: mergeById(current.deletedItems, normalized.deletedItems),
     accumulations: mergeById(current.accumulations, normalized.accumulations),

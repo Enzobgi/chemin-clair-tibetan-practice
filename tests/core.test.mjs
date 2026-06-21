@@ -25,6 +25,7 @@ const defaults = {
   mantra: { count: 0, history: [] },
   sessions: [],
   journals: [],
+  journalTags: [],
   practices: [],
   deletedItems: [],
   accumulations: [],
@@ -141,7 +142,7 @@ test("la migration intermediaire normalise routines, accumulations et journal", 
   assert.equal(migrated.journals[0].type, "quick");
 });
 
-test("la migration version 4 preserve les espaces personnels", () => {
+test("la migration version 5 preserve les espaces personnels", () => {
   const migrated = migrateState({
     schemaVersion: 3,
     sessions: [],
@@ -161,7 +162,7 @@ test("la migration version 4 preserve les espaces personnels", () => {
     audioItems: [],
     reminders: []
   });
-  assert.equal(migrated.schemaVersion, 4);
+  assert.equal(migrated.schemaVersion, 5);
   assert.equal(migrated.retreats[0].days[0].date, "2026-06-20");
   assert.equal(migrated.libraryItems[0].private, true);
   assert.equal(migrated.audioItems[0].title, "Recitation locale");
@@ -169,8 +170,29 @@ test("la migration version 4 preserve les espaces personnels", () => {
   assert.ok(migrated.calendarEvents[0].id);
 });
 
+test("la migration version 5 enrichit le journal sans perdre les anciennes notes", () => {
+  const migrated = migrateState({
+    schemaVersion: 4,
+    sessions: [],
+    practices: [],
+    journals: [{ title: "Ancienne note", date: "2026-06-21", body: "Observation", tags: ["calme"] }],
+    journalTags: [{ label: "calme" }]
+  }, defaults);
+  assert.equal(migrated.journals[0].agitation, "non precisee");
+  assert.equal(migrated.journals[0].torpor, "non precisee");
+  assert.equal(migrated.journals[0].clarity, "non precisee");
+  assert.equal(migrated.journalTags[0].label, "calme");
+});
+
 test("le service worker exclut les API du cache", async () => {
   const worker = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(worker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(worker, /caches\.match/);
+});
+
+test("la suppression de compte reverifie le mot de passe cote serveur", async () => {
+  const endpoint = await readFile(new URL("../api/account.js", import.meta.url), "utf8");
+  assert.match(endpoint, /verifyPassword/);
+  assert.match(endpoint, /DELETE FROM cc_users/);
+  assert.match(endpoint, /clearSession/);
 });
