@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -90,14 +90,26 @@ export function sessionsByDay(sessions, days = 7, end = new Date()) {
   return result;
 }
 
-function normalizeRecord(record, prefix, now) {
+function normalizeRecord(record = {}, prefix, now, fallbackId = "") {
   return {
     ...record,
-    id: record.id || makeStableId(prefix),
+    id: record.id || fallbackId || makeStableId(prefix),
     createdAt: record.createdAt || now,
     updatedAt: record.updatedAt || record.createdAt || now,
-    version: Number(record.version || 1)
+    version: Math.max(1, Number(record.version || 1))
   };
+}
+
+function normalizeTombstone(record, now) {
+  const itemId = record.itemId || record.item?.id || "";
+  const collection = record.collection || "";
+  return normalizeRecord({
+    ...record,
+    id: itemId && collection ? `tombstone:${collection}:${itemId}` : record.id,
+    itemId,
+    collection,
+    deletedAt: record.deletedAt || record.updatedAt || now
+  }, "tombstone", now, itemId && collection ? `tombstone:${collection}:${itemId}` : "");
 }
 
 export function migrateState(input, defaults) {
@@ -108,7 +120,10 @@ export function migrateState(input, defaults) {
     ...source,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     settings: { ...defaults.settings, ...(source.settings || {}) },
-    mantra: { ...defaults.mantra, ...(source.mantra || {}) },
+    mantra: normalizeRecord({
+      ...defaults.mantra,
+      ...(source.mantra || {})
+    }, "mantra-state", now, "mantra-state"),
     sessions: Array.isArray(source.sessions)
       ? source.sessions.map((session) => normalizeRecord({
           ...session,
@@ -137,7 +152,9 @@ export function migrateState(input, defaults) {
           ...practice,
           archived: Boolean(practice.archived)
         }, "practice", now)),
-    deletedItems: Array.isArray(source.deletedItems) ? source.deletedItems : [],
+    deletedItems: Array.isArray(source.deletedItems)
+      ? source.deletedItems.map((item) => normalizeTombstone(item, now))
+      : [],
     accumulations: Array.isArray(source.accumulations)
       ? source.accumulations.map((item) => normalizeRecord({
           ...item,
@@ -162,7 +179,9 @@ export function migrateState(input, defaults) {
       ? source.retreats.map((retreat) => normalizeRecord({
           ...retreat,
           archived: Boolean(retreat.archived),
-          days: Array.isArray(retreat.days) ? retreat.days : []
+          days: Array.isArray(retreat.days)
+            ? retreat.days.map((day) => normalizeRecord(day, "retreat-day", now))
+            : []
         }, "retreat", now))
       : [],
     libraryItems: Array.isArray(source.libraryItems)
@@ -234,37 +253,175 @@ export function validateBackup(value) {
   return { valid: errors.length === 0, errors };
 }
 
-export function mergeById(existing = [], incoming = []) {
+function canonicalValue(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalValue).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalValue(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function compareRecords(left = {}, right = {}) {
+  const versionDifference = Number(left.version || 0) - Number(right.version || 0);
+  if (versionDifference) return versionDifference;
+  const updatedDifference = String(left.updatedAt || "").localeCompare(String(right.updatedAt || ""));
+  if (updatedDifference) return updatedDifference;
+  return canonicalValue(left).localeCompare(canonicalValue(right));
+}
+
+function compareRecordFields(left, right, field) {
+  const leftVersion = Number(left.fieldVersions?.[field] ?? left.version ?? 0);
+  const rightVersion = Number(right.fieldVersions?.[field] ?? right.version ?? 0);
+  if (leftVersion !== rightVersion) return leftVersion - rightVersion;
+  const leftUpdatedAt = String(left.fieldUpdatedAt?.[field] || left.updatedAt || "");
+  const rightUpdatedAt = String(right.fieldUpdatedAt?.[field] || right.updatedAt || "");
+  const updatedDifference = leftUpdatedAt.localeCompare(rightUpdatedAt);
+  if (updatedDifference) return updatedDifference;
+  return canonicalValue(left[field]).localeCompare(canonicalValue(right[field]));
+}
+
+function mergeRecordFields(existing, incoming, excludedFields = []) {
+  const incomingWins = compareRecords(incoming, existing) >= 0;
+  const newer = incomingWins ? incoming : existing;
+  const older = incomingWins ? existing : incoming;
+  const excluded = new Set(["id", "createdAt", "updatedAt", "version", "fieldVersions", "fieldUpdatedAt", ...excludedFields]);
+  const merged = { ...older, ...newer };
+  const fields = new Set([...Object.keys(existing || {}), ...Object.keys(incoming || {})]);
+  fields.forEach((field) => {
+    if (excluded.has(field)) return;
+    if (!Object.hasOwn(incoming, field)) {
+      merged[field] = existing[field];
+      return;
+    }
+    if (!Object.hasOwn(existing, field)) {
+      merged[field] = incoming[field];
+      return;
+    }
+    merged[field] = compareRecordFields(incoming, existing, field) >= 0 ? incoming[field] : existing[field];
+  });
+  merged.fieldVersions = { ...(older.fieldVersions || {}), ...(newer.fieldVersions || {}) };
+  merged.fieldUpdatedAt = { ...(older.fieldUpdatedAt || {}), ...(newer.fieldUpdatedAt || {}) };
+  fields.forEach((field) => {
+    if (excluded.has(field)) return;
+    const source = !Object.hasOwn(incoming, field)
+      ? existing
+      : (!Object.hasOwn(existing, field) || compareRecordFields(incoming, existing, field) >= 0 ? incoming : existing);
+    if (source.fieldVersions?.[field] !== undefined) merged.fieldVersions[field] = source.fieldVersions[field];
+    if (source.fieldUpdatedAt?.[field]) merged.fieldUpdatedAt[field] = source.fieldUpdatedAt[field];
+  });
+  return merged;
+}
+
+function mergeNestedRecords(existing, incoming, nestedFields = []) {
+  const incomingWins = compareRecords(incoming, existing) >= 0;
+  const newer = incomingWins ? incoming : existing;
+  const older = incomingWins ? existing : incoming;
+  const merged = mergeRecordFields(existing, incoming, nestedFields);
+  nestedFields.forEach((field) => {
+    const combined = mergeById(existing?.[field], incoming?.[field]);
+    const records = new Map(combined.map((item) => [item.id, item]));
+    const preferredOrder = [...(newer?.[field] || []), ...(older?.[field] || [])]
+      .map((item) => item.id)
+      .filter((id, index, ids) => id && ids.indexOf(id) === index);
+    merged[field] = preferredOrder.map((id) => records.get(id)).filter(Boolean);
+  });
+  return merged;
+}
+
+function stableRecordOrder(left, right) {
+  return String(left.createdAt || "").localeCompare(String(right.createdAt || ""))
+    || String(left.id || "").localeCompare(String(right.id || ""));
+}
+
+export function mergeById(existing = [], incoming = [], mergeItems = null) {
   const merged = new Map();
   [...existing, ...incoming].forEach((item) => {
+    if (!item || typeof item !== "object") return;
     const id = item.id || makeStableId("import");
     const previous = merged.get(id);
-    if (!previous || String(item.updatedAt || "") >= String(previous.updatedAt || "")) {
-      merged.set(id, { ...item, id });
-    }
+    if (!previous) merged.set(id, { ...item, id });
+    else merged.set(id, mergeItems
+      ? mergeItems(previous, { ...item, id })
+      : mergeRecordFields(previous, { ...item, id }));
   });
-  return [...merged.values()];
+  return [...merged.values()].sort(stableRecordOrder);
+}
+
+function tombstoneWins(tombstone, item) {
+  return compareRecords(tombstone, item) >= 0;
+}
+
+function applyTombstones(items, collection, tombstones) {
+  const deleted = new Map(
+    tombstones
+      .filter((item) => item.collection === collection && item.itemId)
+      .map((item) => [item.itemId, item])
+  );
+  return items.filter((item) => {
+    const tombstone = deleted.get(item.id);
+    return !tombstone || !tombstoneWins(tombstone, item);
+  });
+}
+
+function applyNestedTombstones(items, parentCollection, childField, tombstones) {
+  const collection = `${parentCollection}.${childField}`;
+  return items.map((item) => ({
+    ...item,
+    [childField]: applyTombstones(item[childField] || [], collection, tombstones)
+  }));
 }
 
 export function mergeImportedState(current, imported, defaults) {
+  const currentNormalized = migrateState(current, defaults);
   const normalized = migrateState(imported, defaults);
-  return migrateState({
-    ...current,
+  const deletedItems = mergeById(currentNormalized.deletedItems, normalized.deletedItems);
+  const merged = {
+    ...currentNormalized,
     ...normalized,
-    settings: { ...current.settings, ...normalized.settings },
-    sessions: mergeById(current.sessions, normalized.sessions),
-    journals: mergeById(current.journals, normalized.journals),
-    journalTags: mergeById(current.journalTags, normalized.journalTags),
-    practices: mergeById(current.practices, normalized.practices),
-    deletedItems: mergeById(current.deletedItems, normalized.deletedItems),
-    accumulations: mergeById(current.accumulations, normalized.accumulations),
-    routines: mergeById(current.routines, normalized.routines),
-    retreats: mergeById(current.retreats, normalized.retreats),
-    libraryItems: mergeById(current.libraryItems, normalized.libraryItems),
-    audioItems: mergeById(current.audioItems, normalized.audioItems),
-    reminders: mergeById(current.reminders, normalized.reminders),
-    calendarEvents: mergeById(current.calendarEvents, normalized.calendarEvents)
-  }, defaults);
+    settings: { ...currentNormalized.settings, ...normalized.settings },
+    mantra: mergeNestedRecords(currentNormalized.mantra, normalized.mantra, ["history"]),
+    deletedItems,
+    sessions: applyTombstones(mergeById(currentNormalized.sessions, normalized.sessions), "sessions", deletedItems),
+    journals: applyTombstones(mergeById(currentNormalized.journals, normalized.journals), "journals", deletedItems),
+    journalTags: applyTombstones(mergeById(currentNormalized.journalTags, normalized.journalTags), "journalTags", deletedItems),
+    practices: applyTombstones(mergeById(currentNormalized.practices, normalized.practices), "practices", deletedItems),
+    accumulations: applyNestedTombstones(
+      applyTombstones(
+        mergeById(currentNormalized.accumulations, normalized.accumulations, (left, right) => mergeNestedRecords(left, right, ["entries"])),
+        "accumulations",
+        deletedItems
+      ),
+      "accumulations",
+      "entries",
+      deletedItems
+    ),
+    routines: applyNestedTombstones(
+      applyTombstones(
+        mergeById(currentNormalized.routines, normalized.routines, (left, right) => mergeNestedRecords(left, right, ["steps"])),
+        "routines",
+        deletedItems
+      ),
+      "routines",
+      "steps",
+      deletedItems
+    ),
+    retreats: applyNestedTombstones(
+      applyTombstones(
+        mergeById(currentNormalized.retreats, normalized.retreats, (left, right) => mergeNestedRecords(left, right, ["days"])),
+        "retreats",
+        deletedItems
+      ),
+      "retreats",
+      "days",
+      deletedItems
+    ),
+    libraryItems: applyTombstones(mergeById(currentNormalized.libraryItems, normalized.libraryItems), "libraryItems", deletedItems),
+    audioItems: applyTombstones(mergeById(currentNormalized.audioItems, normalized.audioItems), "audioItems", deletedItems),
+    reminders: applyTombstones(mergeById(currentNormalized.reminders, normalized.reminders), "reminders", deletedItems),
+    calendarEvents: applyTombstones(mergeById(currentNormalized.calendarEvents, normalized.calendarEvents), "calendarEvents", deletedItems)
+  };
+  merged.mantra.history = applyTombstones(merged.mantra.history, "mantra.history", deletedItems);
+  return migrateState(merged, defaults);
 }
 
 export function removeWithUndo(state, collection, id, now = new Date().toISOString()) {
@@ -274,24 +431,55 @@ export function removeWithUndo(state, collection, id, now = new Date().toISOStri
   if (index < 0) return null;
   const [item] = items.splice(index, 1);
   const deleted = {
-    id: makeStableId("deleted"),
+    id: `tombstone:${collection}:${item.id}`,
     collection,
+    itemId: item.id,
     index,
     item,
     deletedAt: now,
     createdAt: now,
     updatedAt: now,
-    version: 1
+    version: Number(item.version || 1) + 1
   };
   state.deletedItems = Array.isArray(state.deletedItems) ? state.deletedItems : [];
-  state.deletedItems.push(deleted);
+  const existingIndex = state.deletedItems.findIndex((entry) => entry.collection === collection && entry.itemId === item.id);
+  if (existingIndex >= 0) state.deletedItems.splice(existingIndex, 1, deleted);
+  else state.deletedItems.push(deleted);
   return deleted;
+}
+
+export function recordNestedDeletions(state, collection, previous = [], next = [], now = new Date().toISOString()) {
+  const retained = new Set(next.map((item) => item.id).filter(Boolean));
+  const removed = previous.filter((item) => item.id && !retained.has(item.id));
+  state.deletedItems = Array.isArray(state.deletedItems) ? state.deletedItems : [];
+  removed.forEach((item) => {
+    const tombstone = {
+      id: `tombstone:${collection}:${item.id}`,
+      collection,
+      itemId: item.id,
+      item,
+      deletedAt: now,
+      createdAt: now,
+      updatedAt: now,
+      version: Number(item.version || 1) + 1
+    };
+    const index = state.deletedItems.findIndex((entry) => entry.collection === collection && entry.itemId === item.id);
+    if (index >= 0) state.deletedItems.splice(index, 1, tombstone);
+    else state.deletedItems.push(tombstone);
+  });
+  return removed;
 }
 
 export function restoreLastDeleted(state) {
   const deleted = state.deletedItems?.pop();
   if (!deleted || !Array.isArray(state[deleted.collection])) return null;
   const target = state[deleted.collection];
-  target.splice(Math.min(Number(deleted.index || 0), target.length), 0, deleted.item);
-  return deleted.item;
+  const now = new Date().toISOString();
+  const restored = {
+    ...deleted.item,
+    updatedAt: now,
+    version: Math.max(Number(deleted.version || 1), Number(deleted.item?.version || 1)) + 1
+  };
+  target.splice(Math.min(Number(deleted.index || 0), target.length), 0, restored);
+  return restored;
 }

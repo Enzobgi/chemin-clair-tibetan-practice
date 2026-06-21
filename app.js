@@ -8,6 +8,7 @@ import {
   makeStableId,
   mergeImportedState,
   migrateState,
+  recordNestedDeletions,
   removeWithUndo,
   remainingTimerSeconds,
   routineDurationSeconds,
@@ -551,8 +552,8 @@ async function restoreRemoteState({ importLocalWhenEmpty = true } = {}) {
     await syncStateNow();
     if (syncStatus === "synced") {
       render();
-      return;
     }
+    return;
   }
   syncStatus = "syncing";
   renderAccountPanel();
@@ -616,9 +617,12 @@ function weekStart(date = new Date()) {
 
 function weekMinutes() {
   const start = weekStart();
-  return state.sessions
-    .filter((s) => new Date(s.date) >= start)
-    .reduce((sum, s) => sum + Number(s.minutes || 0), 0);
+  const sessions = state.sessions.filter((session) => new Date(`${session.date}T12:00:00`) >= start);
+  return sumSessionSeconds(sessions) / 60;
+}
+
+function countedSessions(sessions = state.sessions) {
+  return sessions.filter((session) => sessionDurationSeconds(session) > 0);
 }
 
 function streak() {
@@ -711,7 +715,7 @@ function renderDashboard() {
     <div class="metrics-grid">
       ${metric("Aujourd'hui", `${todayMinutes} min`, `${Math.max(0, state.settings.dailyGoal - todayMinutes)} min restantes`)}
       ${state.settings.streaksVisible === false ? "" : metric("Serie", `${streak()} jours`, "avec au moins une session")}
-      ${metric("Semaine", `${weekMinutes()} min`, `${state.sessions.length} sessions au total`)}
+      ${metric("Semaine", `${weekMinutes()} min`, `${countedSessions().length} sessions au total`)}
       ${metric("Mantras", totalMantras(), `${state.mantra.selected}`)}
     </div>
     <div class="dashboard-actions">
@@ -1011,16 +1015,19 @@ function renderMantras() {
   `;
   qs("#mantraName").addEventListener("change", (e) => {
     state.mantra.selected = e.target.value.trim() || "Mantra";
+    markUpdated(state.mantra, ["selected"]);
     saveState();
   });
   qs("#addMantra").addEventListener("click", () => {
     state.mantra.count += 1;
+    markUpdated(state.mantra, ["count"]);
     if (state.settings.vibration && navigator.vibrate) navigator.vibrate(18);
     if (state.settings.bell && state.mantra.count % 108 === 0) ringBell();
     saveState();
   });
   qs("#addMala").addEventListener("click", () => {
     state.mantra.count += 108;
+    markUpdated(state.mantra, ["count"]);
     if (state.settings.vibration && navigator.vibrate) navigator.vibrate([25, 30, 25]);
     ringBell();
     saveState();
@@ -1036,11 +1043,13 @@ function renderMantras() {
         mood: "recitation"
       }));
       state.mantra.count = 0;
+      markUpdated(state.mantra, ["count", "history"]);
       saveState();
     }
   });
   qs("#resetMantra").addEventListener("click", () => {
     state.mantra.count = 0;
+    markUpdated(state.mantra, ["count"]);
     saveState();
   });
 }
@@ -1135,7 +1144,7 @@ function bindRoutineActions() {
       const routine = state.routines.find((item) => item.id === button.dataset.archiveRoutine);
       if (!routine) return;
       routine.archived = !routine.archived;
-      markUpdated(routine);
+      markUpdated(routine, ["archived"]);
       saveState();
     });
   });
@@ -1151,7 +1160,7 @@ function bindRoutineActions() {
       const target = button.dataset.routineUp ? index - 1 : index + 1;
       if (!routine || target < 0 || target >= routine.steps.length) return;
       [routine.steps[index], routine.steps[target]] = [routine.steps[target], routine.steps[index]];
-      markUpdated(routine);
+      markUpdated(routine, ["steps"]);
       saveState();
     });
   });
@@ -1179,13 +1188,24 @@ function openRoutineDialog(routine = null) {
     </label>
     <p class="muted">Les boutons haut et bas sur la fiche permettent ensuite de reorganiser rapidement les etapes.</p>
   `, () => {
-    const steps = qs("#routineSteps").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const previousSteps = routine?.steps || [];
+    const usedStepIds = new Set();
+    const steps = qs("#routineSteps").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line, index) => {
       const [practiceTitle, minutes, optional] = line.split("|").map((part) => part.trim());
-      return newRecord({
+      const values = {
         practiceTitle: practiceTitle || "Pratique libre",
         minutes: Math.max(1, Number(minutes || 5)),
         optional: /^(oui|yes|true|1)$/i.test(optional || "")
-      });
+      };
+      const existing = previousSteps[index]?.practiceTitle === values.practiceTitle
+        ? previousSteps[index]
+        : previousSteps.find((step) => step.practiceTitle === values.practiceTitle && !usedStepIds.has(step.id));
+      if (!existing) return newRecord(values);
+      usedStepIds.add(existing.id);
+      const changed = existing.minutes !== values.minutes || existing.optional !== values.optional;
+      const next = { ...existing, ...values };
+      if (changed) markUpdated(next, ["minutes", "optional"]);
+      return next;
     });
     const values = {
       name: qs("#routineName").value.trim() || "Ma routine",
@@ -1196,8 +1216,9 @@ function openRoutineDialog(routine = null) {
       archived: routine?.archived || false
     };
     if (routine) {
+      recordNestedDeletions(state, "routines.steps", routine.steps, steps);
       Object.assign(routine, values);
-      markUpdated(routine);
+      markUpdated(routine, Object.keys(values));
     } else {
       state.routines.push(newRecord(values));
     }
@@ -1315,7 +1336,7 @@ function bindPracticeButtons() {
       const practice = state.practices.find((item) => item.id === btn.dataset.archivePractice);
       if (!practice) return;
       practice.archived = !practice.archived;
-      markUpdated(practice);
+      markUpdated(practice, ["archived"]);
       saveState();
       showToast(practice.archived ? "Pratique archivee." : "Pratique restauree.");
     });
@@ -1668,7 +1689,7 @@ function bindAccumulationActions() {
       const item = state.accumulations.find((entry) => entry.id === button.dataset.archiveAccumulation);
       if (!item) return;
       item.archived = !item.archived;
-      markUpdated(item);
+      markUpdated(item, ["archived"]);
       saveState();
     });
   });
@@ -1681,7 +1702,7 @@ function addAccumulationEntry(id, count, date = todayKey(), note = "") {
   const item = state.accumulations.find((entry) => entry.id === id);
   if (!item || !Number.isFinite(count) || count === 0) return;
   item.entries.push(newRecord({ date, count, note }));
-  markUpdated(item);
+  markUpdated(item, ["entries"]);
   saveState();
   showToast("Progression enregistree.");
 }
@@ -1729,7 +1750,7 @@ function openAccumulationDialog(item = null) {
     };
     if (item) {
       Object.assign(item, values);
-      markUpdated(item);
+      markUpdated(item, Object.keys(values));
     } else {
       state.accumulations.push(newRecord({ ...values, archived: false, entries: [] }));
     }
@@ -1923,7 +1944,7 @@ function renderCalendar() {
 }
 
 function openDayDetail(date) {
-  const sessions = state.sessions.filter((session) => session.date === date);
+  const sessions = countedSessions(state.sessions.filter((session) => session.date === date));
   const journals = state.journals.filter((entry) => entry.date === date);
   const mantras = state.mantra.history.filter((entry) => entry.date === date);
   const dateLabel = formatDisplayDate(date, {
@@ -2058,7 +2079,7 @@ function openRetreatDialog(retreat = null) {
     };
     if (retreat) {
       Object.assign(retreat, values);
-      markUpdated(retreat);
+      markUpdated(retreat, Object.keys(values));
     } else {
       state.retreats.push(newRecord({ ...values, archived: false, days: [] }));
     }
@@ -2096,8 +2117,8 @@ function openRetreatMode(retreat) {
     day.energy = qs("#retreatEnergy").value.trim();
     day.generalState = qs("#retreatState").value.trim();
     day.note = qs("#retreatNote").value.trim();
-    markUpdated(day);
-    markUpdated(retreat);
+    markUpdated(day, ["completed", "sleep", "energy", "generalState", "note"]);
+    markUpdated(retreat, ["days"]);
     qs("#practiceDialog").close();
     saveState();
     showToast("Journee de retraite enregistree.");
@@ -2147,7 +2168,7 @@ function renderLibrary() {
     const item = state.libraryItems.find((entry) => entry.id === button.dataset.favoriteLibrary);
     if (!item) return;
     item.favorite = !item.favorite;
-    markUpdated(item);
+    markUpdated(item, ["favorite"]);
     saveState();
   }));
   document.querySelectorAll("[data-guide-id]").forEach((link) => {
@@ -2213,7 +2234,7 @@ function openLibraryItemDialog(item = null) {
     };
     if (item) {
       Object.assign(item, values);
-      markUpdated(item);
+      markUpdated(item, Object.keys(values));
     } else {
       state.libraryItems.push(newRecord(values));
     }
@@ -2349,7 +2370,7 @@ function openCalendarEventDialog(event = null) {
     <label>Pratique suggeree <input id="eventPractice" value="${escapeAttr(event?.suggestedPractice || "")}"></label>
   `, () => {
     const values = { name: qs("#eventName").value.trim(), date: qs("#eventDate").value, tradition: qs("#eventTradition").value.trim(), type: qs("#eventType").value, source: qs("#eventSource").value.trim(), explanation: qs("#eventExplanation").value.trim(), suggestedPractice: qs("#eventPractice").value.trim() };
-    if (event) { Object.assign(event, values); markUpdated(event); } else state.calendarEvents.push(newRecord(values));
+    if (event) { Object.assign(event, values); markUpdated(event, Object.keys(values)); } else state.calendarEvents.push(newRecord(values));
     saveState();
   });
 }
@@ -2381,7 +2402,7 @@ function renderReminders() {
     const item = state.reminders.find((reminder) => reminder.id === button.dataset.toggleReminder);
     if (!item) return;
     item.enabled = !item.enabled;
-    markUpdated(item);
+    markUpdated(item, ["enabled"]);
     saveState();
     scheduleReminderChecks();
   }));
@@ -2406,7 +2427,7 @@ function openReminderDialog(item = null) {
     <label>Message <textarea id="reminderMessage">${escapeHtml(item?.message || "Ton espace de pratique est disponible lorsque tu le souhaites.")}</textarea></label>
   `, () => {
     const values = { title: qs("#reminderTitle").value.trim(), type: qs("#reminderType").value, time: qs("#reminderTime").value, days: [...document.querySelectorAll('input[name="reminderDay"]:checked')].map((input) => Number(input.value)), message: qs("#reminderMessage").value.trim(), enabled: item?.enabled || false, lastTriggered: item?.lastTriggered || "" };
-    if (item) { Object.assign(item, values); markUpdated(item); } else state.reminders.push(newRecord(values));
+    if (item) { Object.assign(item, values); markUpdated(item, Object.keys(values)); } else state.reminders.push(newRecord(values));
     saveState();
     scheduleReminderChecks();
   });
@@ -2428,7 +2449,7 @@ function checkReminders() {
     if (!item.enabled || item.time !== time || !item.days.includes(now.getDay()) || item.lastTriggered === triggerKey) return;
     new Notification(item.title, { body: item.message, icon: "./assets/icon.svg" });
     item.lastTriggered = triggerKey;
-    markUpdated(item);
+    markUpdated(item, ["lastTriggered"]);
     saveState();
   });
 }
@@ -2745,7 +2766,7 @@ function openSessionDialog(date = todayKey(), session = null) {
     };
     if (session) {
       Object.assign(session, values);
-      markUpdated(session);
+      markUpdated(session, Object.keys(values));
     } else {
       const now = new Date().toISOString();
       state.sessions.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
@@ -2801,7 +2822,7 @@ Dedication | Reposer l'esprit et dedier les bienfaits.`;
     };
     if (practice) {
       Object.assign(practice, values);
-      markUpdated(practice);
+      markUpdated(practice, Object.keys(values));
     } else {
       const now = new Date().toISOString();
       state.practices.push({ id: makeId(), ...values, archived: false, createdAt: now, updatedAt: now, version: 1 });
@@ -2900,7 +2921,7 @@ function openJournalDialog(entry = null) {
     });
     if (entry) {
       Object.assign(entry, values);
-      markUpdated(entry);
+      markUpdated(entry, Object.keys(values));
     } else {
       const now = new Date().toISOString();
       state.journals.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
@@ -2919,7 +2940,7 @@ function readFileAsDataUrl(file) {
 }
 
 function openWeeklyReviewDialog() {
-  const weekSessions = state.sessions.filter((session) => new Date(`${session.date}T12:00:00`) >= weekStart());
+  const weekSessions = countedSessions(state.sessions.filter((session) => new Date(`${session.date}T12:00:00`) >= weekStart()));
   const practiceTotals = new Map();
   weekSessions.forEach((session) => practiceTotals.set(session.label, (practiceTotals.get(session.label) || 0) + sessionDurationSeconds(session)));
   const mostRegular = [...practiceTotals.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || "Aucune pratique enregistree";
@@ -2958,9 +2979,23 @@ function openWeeklyReviewDialog() {
   });
 }
 
-function markUpdated(record) {
-  record.updatedAt = new Date().toISOString();
-  record.version = Number(record.version || 1) + 1;
+function markUpdated(record, fields = Object.keys(record)) {
+  const previousVersion = Number(record.version || 1);
+  const previousUpdatedAt = record.updatedAt || record.createdAt || new Date().toISOString();
+  const now = new Date().toISOString();
+  record.fieldVersions = { ...(record.fieldVersions || {}) };
+  record.fieldUpdatedAt = { ...(record.fieldUpdatedAt || {}) };
+  Object.keys(record).forEach((field) => {
+    if (["fieldVersions", "fieldUpdatedAt"].includes(field)) return;
+    if (record.fieldVersions[field] === undefined) record.fieldVersions[field] = previousVersion;
+    if (!record.fieldUpdatedAt[field]) record.fieldUpdatedAt[field] = previousUpdatedAt;
+  });
+  record.updatedAt = now;
+  record.version = previousVersion + 1;
+  fields.forEach((field) => {
+    record.fieldVersions[field] = record.version;
+    record.fieldUpdatedAt[field] = now;
+  });
 }
 
 function newRecord(values) {
@@ -3028,7 +3063,7 @@ function bindJournalActions() {
       const entry = state.journals.find((item) => item.id === button.dataset.favoriteJournal);
       if (!entry) return;
       entry.favorite = !entry.favorite;
-      markUpdated(entry);
+      markUpdated(entry, ["favorite"]);
       saveState();
     });
   });
@@ -3188,7 +3223,7 @@ function printJournalReport() {
   windowRef.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Chemin Clair - Rapport</title>
     <style>body{font:16px/1.55 Georgia,serif;max-width:820px;margin:40px auto;padding:0 24px;color:#2c2622}h1,h2{color:#6f263d}article{border-top:1px solid #d8c9bb;padding:14px 0}.muted{color:#6d625b}@media print{button{display:none}}</style>
     </head><body><h1>Chemin Clair</h1><p class="muted">Rapport du ${new Date().toLocaleDateString("fr-FR")}</p>
-    <h2>Statistiques</h2><p>${state.sessions.length} sessions · ${formatDuration(totalSeconds)} de pratique · ${state.mantra.history.reduce((sum, item) => sum + Number(item.count || 0), 0)} mantras</p>
+    <h2>Statistiques</h2><p>${countedSessions().length} sessions · ${formatDuration(totalSeconds)} de pratique · ${state.mantra.history.reduce((sum, item) => sum + Number(item.count || 0), 0)} mantras</p>
     <h2>Journal</h2>${state.journals.slice().reverse().map((entry) => `<article><strong>${escapeHtml(entry.title)}</strong><div class="muted">${escapeHtml(entry.date)} · ${Number(entry.minutes || 0)} min</div><p>${escapeHtml(entry.body)}</p></article>`).join("") || "<p>Aucune note.</p>"}
     <button onclick="window.print()">Imprimer ou enregistrer en PDF</button></body></html>`);
   windowRef.document.close();

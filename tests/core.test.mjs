@@ -9,6 +9,7 @@ import {
   elapsedTimerSeconds,
   mergeImportedState,
   migrateState,
+  recordNestedDeletions,
   remainingTimerSeconds,
   removeWithUndo,
   restoreLastDeleted,
@@ -65,6 +66,18 @@ test("les minutes et la serie utilisent les secondes enregistrees", () => {
   assert.equal(calculateStreak(sessions, new Date("2026-06-20T12:00:00")), 3);
 });
 
+test("une routine de 30 minutes ne compte jamais sa session recapitulatrice", () => {
+  const sessions = [
+    { id: "step-1", date: "2026-06-20", durationSeconds: 600 },
+    { id: "step-2", date: "2026-06-20", durationSeconds: 900 },
+    { id: "step-3", date: "2026-06-20", durationSeconds: 300 },
+    { id: "summary", date: "2026-06-20", durationSeconds: 1800, minutes: 30, summaryOnly: true }
+  ];
+  assert.equal(sessionDurationSeconds(sessions[3]), 0);
+  assert.equal(sumSessionSeconds(sessions), 1800);
+  assert.equal(sessionsByDay(sessions, 1, new Date("2026-06-20T12:00:00"))[0].seconds, 1800);
+});
+
 test("la migration preserve l'ancien format et ajoute les metadonnees", () => {
   const migrated = migrateState({
     settings: { dailyGoal: 45 },
@@ -99,6 +112,165 @@ test("la fusion conserve les objets uniques et la version la plus recente", () =
   }, defaults);
   assert.equal(merged.sessions.length, 2);
   assert.equal(merged.sessions.find((item) => item.id === "a").durationSeconds, 300);
+});
+
+test("la fusion conserve les ajouts imbriques faits sur deux appareils", () => {
+  const base = {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    sessions: [],
+    journals: [],
+    practices: [],
+    accumulations: [{
+      id: "acc",
+      name: "Refuge",
+      entries: [{ id: "entry-a", count: 7, createdAt: "2026-06-20T08:00:00Z", updatedAt: "2026-06-20T08:00:00Z", version: 1 }],
+      createdAt: "2026-06-20T07:00:00Z",
+      updatedAt: "2026-06-20T08:00:00Z",
+      version: 2
+    }],
+    routines: [{
+      id: "routine",
+      name: "Matin",
+      steps: [{ id: "step-a", practiceTitle: "Refuge", minutes: 10, createdAt: "2026-06-20T07:00:00Z", updatedAt: "2026-06-20T07:00:00Z", version: 1 }],
+      createdAt: "2026-06-20T07:00:00Z",
+      updatedAt: "2026-06-20T08:00:00Z",
+      version: 2
+    }],
+    retreats: [{
+      id: "retreat",
+      name: "Retraite",
+      days: [{ id: "day-a", date: "2026-06-20", completed: [0], createdAt: "2026-06-20T08:00:00Z", updatedAt: "2026-06-20T08:00:00Z", version: 1 }],
+      createdAt: "2026-06-20T07:00:00Z",
+      updatedAt: "2026-06-20T08:00:00Z",
+      version: 2
+    }],
+    mantra: {
+      id: "mantra-state",
+      count: 0,
+      history: [{ id: "mantra-a", date: "2026-06-20", count: 108, createdAt: "2026-06-20T08:00:00Z", updatedAt: "2026-06-20T08:00:00Z", version: 1 }],
+      createdAt: "2026-06-20T07:00:00Z",
+      updatedAt: "2026-06-20T08:00:00Z",
+      version: 2
+    }
+  };
+  const otherDevice = structuredClone(base);
+  otherDevice.accumulations[0].entries = [{ id: "entry-b", count: 21, createdAt: "2026-06-20T09:00:00Z", updatedAt: "2026-06-20T09:00:00Z", version: 1 }];
+  otherDevice.routines[0].steps.push({ id: "step-b", practiceTitle: "Dedication", minutes: 5, createdAt: "2026-06-20T09:00:00Z", updatedAt: "2026-06-20T09:00:00Z", version: 1 });
+  otherDevice.retreats[0].days = [{ id: "day-b", date: "2026-06-21", completed: [0, 1], createdAt: "2026-06-20T09:00:00Z", updatedAt: "2026-06-20T09:00:00Z", version: 1 }];
+  otherDevice.mantra.history = [{ id: "mantra-b", date: "2026-06-21", count: 54, createdAt: "2026-06-20T09:00:00Z", updatedAt: "2026-06-20T09:00:00Z", version: 1 }];
+
+  const merged = mergeImportedState(base, otherDevice, defaults);
+  assert.deepEqual(merged.accumulations[0].entries.map((entry) => entry.id).sort(), ["entry-a", "entry-b"]);
+  assert.deepEqual(merged.routines[0].steps.map((step) => step.id), ["step-a", "step-b"]);
+  assert.deepEqual(merged.retreats[0].days.map((day) => day.id).sort(), ["day-a", "day-b"]);
+  assert.deepEqual(merged.mantra.history.map((entry) => entry.id).sort(), ["mantra-a", "mantra-b"]);
+});
+
+test("deux appareils peuvent modifier des champs differents d'une meme routine", () => {
+  const common = {
+    id: "routine",
+    name: "Matin",
+    description: "Courte",
+    steps: [],
+    createdAt: "2026-06-20T07:00:00Z",
+    updatedAt: "2026-06-20T08:00:00Z",
+    version: 2
+  };
+  const firstDevice = {
+    sessions: [],
+    journals: [],
+    practices: [],
+    routines: [{
+      ...common,
+      name: "Matin calme",
+      fieldVersions: { name: 2, description: 1 },
+      fieldUpdatedAt: { name: "2026-06-20T08:00:00Z", description: "2026-06-20T07:00:00Z" }
+    }]
+  };
+  const secondDevice = {
+    sessions: [],
+    journals: [],
+    practices: [],
+    routines: [{
+      ...common,
+      description: "Routine avant le travail",
+      fieldVersions: { name: 1, description: 2 },
+      fieldUpdatedAt: { name: "2026-06-20T07:00:00Z", description: "2026-06-20T08:30:00Z" }
+    }]
+  };
+  const merged = mergeImportedState(firstDevice, secondDevice, defaults);
+  assert.equal(merged.routines[0].name, "Matin calme");
+  assert.equal(merged.routines[0].description, "Routine avant le travail");
+});
+
+test("un tombstone empeche un element supprime de reapparaitre", () => {
+  const local = migrateState({
+    sessions: [{ id: "session-a", date: "2026-06-20", minutes: 10, createdAt: "2026-06-20T08:00:00Z", updatedAt: "2026-06-20T08:00:00Z", version: 1 }],
+    journals: [],
+    practices: []
+  }, defaults);
+  removeWithUndo(local, "sessions", "session-a", "2026-06-20T09:00:00Z");
+  const staleRemote = {
+    sessions: [{ id: "session-a", date: "2026-06-20", minutes: 10, createdAt: "2026-06-20T08:00:00Z", updatedAt: "2026-06-20T08:00:00Z", version: 1 }],
+    journals: [],
+    practices: []
+  };
+  const merged = mergeImportedState(staleRemote, local, defaults);
+  assert.equal(merged.sessions.length, 0);
+  assert.equal(merged.deletedItems[0].itemId, "session-a");
+  assert.equal(merged.deletedItems[0].collection, "sessions");
+});
+
+test("la suppression d'une etape imbriquee produit un tombstone synchronisable", () => {
+  const state = { deletedItems: [] };
+  const previous = [
+    { id: "step-a", version: 1 },
+    { id: "step-b", version: 3 }
+  ];
+  const removed = recordNestedDeletions(state, "routines.steps", previous, [previous[0]], "2026-06-20T10:00:00Z");
+  assert.deepEqual(removed.map((item) => item.id), ["step-b"]);
+  assert.deepEqual(state.deletedItems[0], {
+    id: "tombstone:routines.steps:step-b",
+    collection: "routines.steps",
+    itemId: "step-b",
+    item: previous[1],
+    deletedAt: "2026-06-20T10:00:00Z",
+    createdAt: "2026-06-20T10:00:00Z",
+    updatedAt: "2026-06-20T10:00:00Z",
+    version: 4
+  });
+});
+
+test("un tombstone imbrique retire une ancienne etape lors de la fusion", () => {
+  const stale = {
+    sessions: [],
+    journals: [],
+    practices: [],
+    routines: [{
+      id: "routine",
+      name: "Matin",
+      steps: [
+        { id: "step-a", practiceTitle: "Refuge", createdAt: "2026-06-20T07:00:00Z", updatedAt: "2026-06-20T07:00:00Z", version: 1 },
+        { id: "step-b", practiceTitle: "Dedication", createdAt: "2026-06-20T07:00:00Z", updatedAt: "2026-06-20T07:00:00Z", version: 1 }
+      ],
+      createdAt: "2026-06-20T07:00:00Z",
+      updatedAt: "2026-06-20T07:00:00Z",
+      version: 1
+    }]
+  };
+  const deleted = structuredClone(stale);
+  deleted.routines[0].steps = [deleted.routines[0].steps[0]];
+  deleted.deletedItems = [{
+    id: "tombstone:routines.steps:step-b",
+    collection: "routines.steps",
+    itemId: "step-b",
+    deletedAt: "2026-06-20T09:00:00Z",
+    createdAt: "2026-06-20T09:00:00Z",
+    updatedAt: "2026-06-20T09:00:00Z",
+    version: 2
+  }];
+  const merged = mergeImportedState(stale, deleted, defaults);
+  assert.deepEqual(merged.routines[0].steps.map((step) => step.id), ["step-a"]);
 });
 
 test("une suppression peut etre restauree a sa position", () => {
@@ -162,8 +334,10 @@ test("la migration version 5 preserve les espaces personnels", () => {
     audioItems: [],
     reminders: []
   });
-  assert.equal(migrated.schemaVersion, 5);
+  assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
   assert.equal(migrated.retreats[0].days[0].date, "2026-06-20");
+  assert.ok(migrated.retreats[0].days[0].id);
+  assert.ok(migrated.retreats[0].days[0].updatedAt);
   assert.equal(migrated.libraryItems[0].private, true);
   assert.equal(migrated.audioItems[0].title, "Recitation locale");
   assert.equal(migrated.reminders[0].enabled, true);
@@ -188,6 +362,14 @@ test("le service worker exclut les API du cache", async () => {
   const worker = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(worker, /url\.pathname\.startsWith\("\/api\/"\)/);
   assert.match(worker, /caches\.match/);
+});
+
+test("un conflit de synchronisation preserve la copie locale jusqu'au choix utilisateur", async () => {
+  const script = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(
+    script,
+    /if \(localStorage\.getItem\(`\$\{storageKey\(\)\}:dirty`\) === "1"\) \{\s*await syncStateNow\(\);\s*if \(syncStatus === "synced"\) \{\s*render\(\);\s*\}\s*return;\s*\}/s
+  );
 });
 
 test("la suppression de compte reverifie le mot de passe cote serveur", async () => {

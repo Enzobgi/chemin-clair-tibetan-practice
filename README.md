@@ -19,6 +19,8 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Sauvegarde locale dans le navigateur
 - Comptes securises avec session persistante
 - Synchronisation entre appareils
+- Fusion recursive des donnees imbriquees avec resolution deterministe des conflits
+- Tombstones de suppression pour empecher le retour d'elements effaces
 - Donnees isolees par compte
 - Suppression securisee du compte et de ses donnees synchronisees
 
