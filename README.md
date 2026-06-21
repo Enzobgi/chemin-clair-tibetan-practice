@@ -10,13 +10,17 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Rituels detailles pas a pas
 - Creation de pratiques personnelles
 - Journal de pratique
+- Journal enrichi avec revues hebdomadaires, recherche, filtres et images privees
 - Calendrier et suivi des series
 - Bibliotheque de guides complets
+- Retraites, accumulations, calendrier tibetain, audio et rappels
+- Themes clair et sombre, contraste renforce et tailles de texte
 - Export des donnees au format JSON
 - Sauvegarde locale dans le navigateur
 - Comptes securises avec session persistante
 - Synchronisation entre appareils
 - Donnees isolees par compte
+- Suppression securisee du compte et de ses donnees synchronisees
 
 ## Utilisation
 
