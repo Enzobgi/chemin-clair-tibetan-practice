@@ -16,6 +16,54 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+:root[data-text-size="small"] {
+  font-size: 14px;
+}
+
+:root[data-text-size="normal"] {
+  font-size: 16px;
+}
+
+:root[data-text-size="large"] {
+  font-size: 18px;
+}
+
+:root[data-text-size="xlarge"] {
+  font-size: 20px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f4eee3;
+  --muted: #c3b9aa;
+  --line: #554d43;
+  --paper: #181715;
+  --panel: #24211e;
+  --panel-strong: #302b25;
+  --gold: #e0ad55;
+  --saffron: #e0a83d;
+  --maroon: #c75c70;
+  --teal: #6db6b7;
+  --sky: #25393c;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.3);
+}
+
+:root.high-contrast {
+  --ink: #111;
+  --muted: #383838;
+  --line: #514a40;
+  --maroon: #681526;
+  --teal: #075b5e;
+}
+
+:root[data-theme="dark"].high-contrast {
+  --ink: #fff;
+  --muted: #e5ded3;
+  --line: #c2b8aa;
+  --maroon: #ff8398;
+  --teal: #86e1e2;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -25,6 +73,53 @@ body {
   min-height: 100vh;
   background: linear-gradient(180deg, #f5efe3 0%, #fbf8f0 44%, #eef6f4 100%);
   color: var(--ink);
+}
+
+:root[data-theme="dark"] body {
+  background: #181715;
+}
+
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .daily-card,
+:root[data-theme="dark"] .account-card,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .metric-card,
+:root[data-theme="dark"] .practice-row,
+:root[data-theme="dark"] .library-card,
+:root[data-theme="dark"] .calendar-day,
+:root[data-theme="dark"] .journal-entry,
+:root[data-theme="dark"] .ghost-btn,
+:root[data-theme="dark"] .icon-btn,
+:root[data-theme="dark"] .dialog-card,
+:root[data-theme="dark"] input,
+:root[data-theme="dark"] select,
+:root[data-theme="dark"] textarea {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .nav-btn:hover,
+:root[data-theme="dark"] .nav-btn.is-active,
+:root[data-theme="dark"] .tag,
+:root[data-theme="dark"] .chip,
+:root[data-theme="dark"] .day-picker,
+:root[data-theme="dark"] .detail-lead {
+  background: var(--panel-strong);
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .calendar-day.is-outside,
+:root[data-theme="dark"] .import-error,
+:root[data-theme="dark"] .detail-caution {
+  background: #30251f;
+}
+
+:root[data-theme="dark"] .detail-callout {
+  background: #203633;
+}
+
+:root[data-theme="dark"] .timer-face {
+  background: #24211e;
 }
 
 button,
@@ -594,6 +689,12 @@ menu {
   margin: 18px 0;
 }
 
+.journal-favorite-filter {
+  align-self: end;
+  min-height: 44px;
+  padding: 0 4px;
+}
+
 .compact-filter {
   min-width: min(100%, 420px);
   grid-template-columns: repeat(2, minmax(140px, 1fr));
@@ -791,6 +892,97 @@ menu {
 .settings-grid {
   display: grid;
   gap: 12px;
+}
+
+.journal-image {
+  width: min(100%, 720px);
+  max-height: 460px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+}
+
+.journal-observations {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.journal-observations div {
+  padding: 10px;
+  border-left: 3px solid var(--teal);
+  background: var(--panel-strong);
+}
+
+.journal-observations dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.journal-observations dd {
+  margin: 4px 0 0;
+}
+
+.field-help {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.attachment-preview {
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-preview img {
+  width: min(100%, 360px);
+  max-height: 260px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.settings-sections {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.settings-group {
+  min-width: 0;
+  margin: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.settings-group legend {
+  padding: 0 8px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.settings-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.danger-zone {
+  border-color: #c78d97;
+}
+
+:root.reduce-motion *,
+:root.reduce-motion *::before,
+:root.reduce-motion *::after {
+  scroll-behavior: auto !important;
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
 }
 
 .practice-row {
@@ -1352,6 +1544,20 @@ menu {
   .library-grid,
   .right-rail {
     grid-template-columns: 1fr;
+  }
+
+  .settings-actions,
+  .journal-observations {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .section-head > .primary-btn {
+    width: 100%;
   }
 
   .nav-list {
