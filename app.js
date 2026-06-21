@@ -235,9 +235,19 @@ const seedState = {
     defaultTimer: 15,
     bell: true,
     statsVisible: true,
+    streaksVisible: true,
     tibetanCalendarProfile: "personnalise",
     remindersPaused: false,
-    themeDensity: "comfortable"
+    language: "fr",
+    theme: "auto",
+    textSize: "normal",
+    highContrast: false,
+    reducedMotion: false,
+    vibration: false,
+    dateFormat: "long",
+    firstDayOfWeek: "monday",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    cloudSyncEnabled: true
   },
   intentions: [
     "Que cette pratique nourrisse la clarte, la patience et une compassion concrete.",
@@ -247,6 +257,7 @@ const seedState = {
   practices: defaultPractices,
   sessions: [],
   journals: [],
+  journalTags: [],
   deletedItems: [],
   routines: [
     {
@@ -304,12 +315,51 @@ let toastTimer = null;
 let remoteRevision = 0;
 let focusSession = null;
 let focusInterval = null;
-let journalFilters = { query: "", type: "all", sort: "newest" };
+let journalFilters = { query: "", type: "all", practice: "all", favorite: false, sort: "newest" };
 let statsPeriod = 30;
 let activeAudioUrl = null;
 let reminderInterval = null;
 
 const qs = (selector) => document.querySelector(selector);
+
+function applyPreferences() {
+  const settings = state.settings || {};
+  const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+  const resolvedTheme = settings.theme === "auto" ? (prefersDark ? "dark" : "light") : settings.theme;
+  document.documentElement.dataset.theme = resolvedTheme || "light";
+  document.documentElement.dataset.textSize = settings.textSize || "normal";
+  document.documentElement.classList.toggle("high-contrast", Boolean(settings.highContrast));
+  document.documentElement.classList.toggle("reduce-motion", Boolean(settings.reducedMotion));
+  document.documentElement.lang = settings.language || "fr";
+}
+
+function formatDisplayDate(value, options = {}) {
+  const date = value instanceof Date ? value : new Date(`${value}T12:00:00`);
+  const formats = {
+    short: { day: "2-digit", month: "2-digit", year: "numeric" },
+    iso: { year: "numeric", month: "2-digit", day: "2-digit" },
+    long: { day: "numeric", month: "long", year: "numeric" }
+  };
+  if (state.settings.dateFormat === "iso" && !options.weekday) return localDateKey(date);
+  try {
+    return date.toLocaleDateString(state.settings.language === "fr" ? "fr-FR" : "en-GB", {
+      ...(formats[state.settings.dateFormat] || formats.long),
+      ...options,
+      timeZone: state.settings.timezone || undefined
+    });
+  } catch {
+    return date.toLocaleDateString("fr-FR", { ...(formats.long), ...options });
+  }
+}
+
+function isValidTimeZone(value) {
+  try {
+    Intl.DateTimeFormat("fr-FR", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function storageKey(userId = currentUser?.id) {
   return userId ? `${STORAGE_KEY}:user:${userId}` : `${STORAGE_KEY}:guest`;
@@ -363,6 +413,27 @@ function revisionStorageKey() {
   return `${storageKey()}:revision`;
 }
 
+function stateForRemoteSync() {
+  const remoteState = clone(state);
+  remoteState.journals = remoteState.journals.map((entry) => ({
+    ...entry,
+    image: entry.image ? { ...entry.image, dataUrl: undefined, localOnly: true } : null
+  }));
+  return remoteState;
+}
+
+function preserveLocalJournalImages(remoteState) {
+  const localImages = new Map(
+    state.journals
+      .filter((entry) => entry.image?.dataUrl)
+      .map((entry) => [entry.id, entry.image])
+  );
+  remoteState.journals.forEach((entry) => {
+    if (localImages.has(entry.id)) entry.image = localImages.get(entry.id);
+  });
+  return remoteState;
+}
+
 function createTimerState(minutes = state.settings.defaultTimer, label = "Meditation silencieuse") {
   return {
     id: makeId(),
@@ -398,9 +469,10 @@ function clearTimerTicker() {
 
 function saveState({ remote = true } = {}) {
   localStorage.setItem(storageKey(), JSON.stringify(state));
-  if (currentUser && remote) localStorage.setItem(`${storageKey()}:dirty`, "1");
+  applyPreferences();
+  if (currentUser && remote && state.settings.cloudSyncEnabled !== false) localStorage.setItem(`${storageKey()}:dirty`, "1");
   render();
-  if (currentUser && remote) scheduleRemoteSync();
+  if (currentUser && remote && state.settings.cloudSyncEnabled !== false) scheduleRemoteSync();
 }
 
 function scheduleRemoteSync() {
@@ -410,15 +482,15 @@ function scheduleRemoteSync() {
   syncTimer = setTimeout(syncStateNow, 500);
 }
 
-async function syncStateNow({ force = false } = {}) {
-  if (!currentUser) return;
+async function syncStateNow({ force = false, bypassPreference = false } = {}) {
+  if (!currentUser || (!bypassPreference && state.settings.cloudSyncEnabled === false)) return;
   try {
     syncStatus = "syncing";
     renderAccountPanel();
     const response = await fetch("/api/state", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ data: state, expectedRevision: remoteRevision, force })
+      body: JSON.stringify({ data: stateForRemoteSync(), expectedRevision: remoteRevision, force })
     });
     const payload = await response.json();
     if (response.status === 409) {
@@ -439,7 +511,11 @@ async function syncStateNow({ force = false } = {}) {
 }
 
 async function restoreRemoteState({ importLocalWhenEmpty = true } = {}) {
-  if (!currentUser) return;
+  if (!currentUser || state.settings.cloudSyncEnabled === false) {
+    syncStatus = currentUser ? "local" : syncStatus;
+    renderAccountPanel();
+    return;
+  }
   if (localStorage.getItem(`${storageKey()}:dirty`) === "1") {
     await syncStateNow();
     if (syncStatus === "synced") {
@@ -456,7 +532,7 @@ async function restoreRemoteState({ importLocalWhenEmpty = true } = {}) {
     remoteRevision = Number(payload.revision || 0);
     localStorage.setItem(revisionStorageKey(), String(remoteRevision));
     if (payload.data) {
-      state = mergeState(seedState, payload.data);
+      state = preserveLocalJournalImages(mergeState(seedState, payload.data));
       localStorage.setItem(storageKey(), JSON.stringify(state));
       localStorage.removeItem(`${storageKey()}:dirty`);
     } else if (importLocalWhenEmpty) {
@@ -551,6 +627,7 @@ function renderShellStats() {
   const percent = Math.min(100, Math.round((todayMinutes / goal) * 100));
   const circumference = 327;
   qs("#sidebarMinutes").textContent = `${todayMinutes} min`;
+  qs("#sidebarStreak").hidden = state.settings.streaksVisible === false;
   qs("#sidebarStreak").textContent = `Serie: ${streak()} jours`;
   qs("#dailyIntention").textContent = state.intentions[new Date().getDate() % state.intentions.length];
   qs("#goalPercent").textContent = `${percent}%`;
@@ -576,7 +653,7 @@ function renderAccountPanel() {
     synced: "Donnees synchronisees",
     syncing: "Synchronisation...",
     error: "Hors ligne, sauvegarde locale active",
-    local: "Sauvegarde locale"
+    local: state.settings.cloudSyncEnabled === false ? "Synchronisation suspendue" : "Sauvegarde locale"
   };
   panel.innerHTML = `
     <span class="eyebrow">Compte</span>
@@ -601,7 +678,7 @@ function renderDashboard() {
   qs("#dashboard").innerHTML = `
     <div class="metrics-grid">
       ${metric("Aujourd'hui", `${todayMinutes} min`, `${Math.max(0, state.settings.dailyGoal - todayMinutes)} min restantes`)}
-      ${metric("Serie", `${streak()} jours`, "avec au moins une session")}
+      ${state.settings.streaksVisible === false ? "" : metric("Serie", `${streak()} jours`, "avec au moins une session")}
       ${metric("Semaine", `${weekMinutes()} min`, `${state.sessions.length} sessions au total`)}
       ${metric("Mantras", totalMantras(), `${state.mantra.selected}`)}
     </div>
@@ -888,7 +965,7 @@ function renderMantras() {
     <section class="panel">
       <span class="eyebrow">Historique</span>
       <div class="practice-list">${state.mantra.history.slice(-8).reverse().map((h) => `
-        <article class="practice-row"><div><h3>${escapeHtml(h.name)}</h3><p>${h.date} - ${h.count} repetitions</p></div></article>
+        <article class="practice-row"><div><h3>${escapeHtml(h.name)}</h3><p>${formatDisplayDate(h.date)} · ${h.count} repetitions</p></div></article>
       `).join("") || empty("Aucun cycle sauvegarde.")}</div>
     </section>
   `;
@@ -898,11 +975,13 @@ function renderMantras() {
   });
   qs("#addMantra").addEventListener("click", () => {
     state.mantra.count += 1;
+    if (state.settings.vibration && navigator.vibrate) navigator.vibrate(18);
     if (state.settings.bell && state.mantra.count % 108 === 0) ringBell();
     saveState();
   });
   qs("#addMala").addEventListener("click", () => {
     state.mantra.count += 108;
+    if (state.settings.vibration && navigator.vibrate) navigator.vibrate([25, 30, 25]);
     ringBell();
     saveState();
   });
@@ -1635,7 +1714,17 @@ function renderJournal() {
   const query = journalFilters.query.toLowerCase();
   const filtered = state.journals
     .filter((entry) => journalFilters.type === "all" || entry.type === journalFilters.type)
-    .filter((entry) => !query || [entry.title, entry.body, ...(entry.tags || [])].join(" ").toLowerCase().includes(query))
+    .filter((entry) => journalFilters.practice === "all" || entry.practiceId === journalFilters.practice)
+    .filter((entry) => !journalFilters.favorite || entry.favorite)
+    .filter((entry) => !query || [
+      entry.title,
+      entry.body,
+      entry.emotion,
+      entry.obstacle,
+      entry.support,
+      entry.intention,
+      ...(entry.tags || [])
+    ].join(" ").toLowerCase().includes(query))
     .sort((a, b) => journalFilters.sort === "oldest"
       ? String(a.date).localeCompare(String(b.date))
       : String(b.date).localeCompare(String(a.date)));
@@ -1656,10 +1745,15 @@ function renderJournal() {
           <option value="free" ${journalFilters.type === "free" ? "selected" : ""}>Journal libre</option>
           <option value="weekly" ${journalFilters.type === "weekly" ? "selected" : ""}>Revue hebdomadaire</option>
         </select></label>
+        <label>Pratique <select id="journalPracticeFilter">
+          <option value="all">Toutes</option>
+          ${state.practices.map((practice) => `<option value="${practice.id}" ${journalFilters.practice === practice.id ? "selected" : ""}>${escapeHtml(practice.title)}</option>`).join("")}
+        </select></label>
         <label>Tri <select id="journalSort">
           <option value="newest">Plus recentes</option>
           <option value="oldest" ${journalFilters.sort === "oldest" ? "selected" : ""}>Plus anciennes</option>
         </select></label>
+        <label class="confirm-line journal-favorite-filter"><input id="journalFavoriteFilter" type="checkbox" ${journalFilters.favorite ? "checked" : ""}> Favoris uniquement</label>
       </div>
       <div class="journal-list">${filtered.map(journalCard).join("") || empty("Aucune note ne correspond a ces filtres.")}</div>
     </section>
@@ -1675,6 +1769,14 @@ function renderJournal() {
     journalFilters.type = event.target.value;
     renderJournal();
   });
+  qs("#journalPracticeFilter").addEventListener("change", (event) => {
+    journalFilters.practice = event.target.value;
+    renderJournal();
+  });
+  qs("#journalFavoriteFilter").addEventListener("change", (event) => {
+    journalFilters.favorite = event.target.checked;
+    renderJournal();
+  });
   qs("#journalSort").addEventListener("change", (event) => {
     journalFilters.sort = event.target.value;
     renderJournal();
@@ -1683,19 +1785,40 @@ function renderJournal() {
 }
 
 function journalCard(entry) {
+  const practice = state.practices.find((item) => item.id === entry.practiceId);
+  const session = state.sessions.find((item) => item.id === entry.sessionId);
+  const indicators = [
+    entry.presence && entry.presence !== "non precisee" ? `Presence : ${entry.presence}` : "",
+    entry.agitation && entry.agitation !== "non precisee" ? `Agitation : ${entry.agitation}` : "",
+    entry.torpor && entry.torpor !== "non precisee" ? `Torpeur : ${entry.torpor}` : "",
+    entry.clarity && entry.clarity !== "non precisee" ? `Clarte : ${entry.clarity}` : "",
+    entry.emotion ? `Emotion : ${entry.emotion}` : ""
+  ].filter(Boolean);
   return `
     <article class="journal-entry panel">
       <div class="row-head">
         <div><span class="eyebrow">${entry.type === "weekly" ? "Revue hebdomadaire" : entry.type === "free" ? "Journal libre" : "Note rapide"}</span><h3>${escapeHtml(entry.title)}</h3></div>
         <button class="icon-btn" data-favorite-journal="${entry.id}" aria-label="${entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris"}">${entry.favorite ? "★" : "☆"}</button>
       </div>
-      <span class="tag">${entry.date}</span>
-      <p>${escapeHtml(entry.body)}</p>
       <div class="tag-row">
-        <span class="tag">${escapeHtml(entry.mood || "presence")}</span>
-        <span class="tag">${entry.minutes || 0} min</span>
+        <span class="tag">${formatDisplayDate(entry.date)}</span>
+        ${practice ? `<span class="tag">${escapeHtml(practice.title)}</span>` : ""}
+        ${session ? `<span class="tag">${formatDuration(sessionDurationSeconds(session))}</span>` : ""}
+      </div>
+      <p>${escapeHtml(entry.body)}</p>
+      ${entry.image?.dataUrl ? `<img class="journal-image" src="${escapeAttr(entry.image.dataUrl)}" alt="${escapeAttr(entry.image.alt || "Image jointe au journal")}">` : ""}
+      <div class="tag-row">
+        ${indicators.map((label) => `<span class="tag">${escapeHtml(label)}</span>`).join("")}
+        ${Number(entry.minutes || 0) ? `<span class="tag">${entry.minutes} min</span>` : ""}
         ${(entry.tags || []).map((tag) => `<span class="tag">#${escapeHtml(tag)}</span>`).join("")}
       </div>
+      ${entry.obstacle || entry.support || entry.intention ? `
+        <dl class="journal-observations">
+          ${entry.obstacle ? `<div><dt>Obstacle</dt><dd>${escapeHtml(entry.obstacle)}</dd></div>` : ""}
+          ${entry.support ? `<div><dt>Soutien</dt><dd>${escapeHtml(entry.support)}</dd></div>` : ""}
+          ${entry.intention ? `<div><dt>Intention</dt><dd>${escapeHtml(entry.intention)}</dd></div>` : ""}
+        </dl>
+      ` : ""}
       <div class="button-row">
         <button class="ghost-btn" data-edit-journal="${entry.id}">Modifier</button>
         <button class="ghost-btn danger-btn" data-delete-journal="${entry.id}">Supprimer</button>
@@ -1707,7 +1830,11 @@ function journalCard(entry) {
 function renderCalendar() {
   const year = calendarCursor.getFullYear();
   const month = calendarCursor.getMonth();
-  const days = buildCalendarDays(year, month, state.settings.firstDayOfWeek !== "sunday");
+  const mondayFirst = state.settings.firstDayOfWeek !== "sunday";
+  const days = buildCalendarDays(year, month, mondayFirst);
+  const weekdayLabels = mondayFirst
+    ? ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+    : ["Dim", "Lun", "Mar", "Mer", "Jeu", "Ven", "Sam"];
   qs("#calendar").innerHTML = `
     <section class="panel">
       <span class="eyebrow">Calendrier</span>
@@ -1717,10 +1844,10 @@ function renderCalendar() {
           <button class="ghost-btn" id="currentMonth">Aujourd'hui</button>
           <button class="icon-btn" id="nextMonth" aria-label="Mois suivant">›</button>
         </div>
-        <h2>${calendarCursor.toLocaleDateString("fr-FR", { month: "long", year: "numeric" })}</h2>
+        <h2>${calendarCursor.toLocaleDateString("fr-FR", { month: "long", year: "numeric", timeZone: state.settings.timezone || undefined })}</h2>
       </div>
       <div class="calendar-grid">
-        ${["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((d) => `<strong class="muted">${d}</strong>`).join("")}
+        ${weekdayLabels.map((d) => `<strong class="muted">${d}</strong>`).join("")}
         ${days.map((day) => {
           const seconds = sumSessionSeconds(state.sessions, day.key);
           const journalCount = state.journals.filter((entry) => entry.date === day.key).length;
@@ -1759,7 +1886,7 @@ function openDayDetail(date) {
   const sessions = state.sessions.filter((session) => session.date === date);
   const journals = state.journals.filter((entry) => entry.date === date);
   const mantras = state.mantra.history.filter((entry) => entry.date === date);
-  const dateLabel = new Date(`${date}T12:00:00`).toLocaleDateString("fr-FR", {
+  const dateLabel = formatDisplayDate(date, {
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -2369,52 +2496,146 @@ function renderStats() {
 function renderSettings() {
   qs("#settings").innerHTML = `
     <section class="panel">
-      <span class="eyebrow">Reglages</span>
-      <h2>Personnalisation</h2>
-      <div class="settings-grid">
-        <div class="form-grid">
+      <div class="section-head">
+        <div><span class="eyebrow">Reglages avances</span><h2>Votre espace de pratique</h2></div>
+        <button class="primary-btn" id="saveSettings">Enregistrer</button>
+      </div>
+      <div class="settings-sections">
+        <fieldset class="settings-group">
+          <legend>Pratique</legend>
+          <div class="form-grid">
           <label>Objectif quotidien en minutes <input id="dailyGoal" type="number" min="1" max="360" value="${state.settings.dailyGoal}"></label>
           <label>Duree par defaut <input id="defaultTimer" type="number" min="1" max="180" value="${state.settings.defaultTimer}"></label>
           <label>Cloche sonore <select id="bellSetting"><option value="true" ${state.settings.bell ? "selected" : ""}>Activee</option><option value="false" ${!state.settings.bell ? "selected" : ""}>Desactivee</option></select></label>
+          <label>Vibration facultative <select id="vibrationSetting"><option value="false" ${!state.settings.vibration ? "selected" : ""}>Desactivee</option><option value="true" ${state.settings.vibration ? "selected" : ""}>Activee</option></select></label>
           <label>Statistiques <select id="statsVisibility"><option value="true" ${state.settings.statsVisible !== false ? "selected" : ""}>Visibles</option><option value="false" ${state.settings.statsVisible === false ? "selected" : ""}>Masquees</option></select></label>
+          <label>Series <select id="streakVisibility"><option value="true" ${state.settings.streaksVisible !== false ? "selected" : ""}>Visibles</option><option value="false" ${state.settings.streaksVisible === false ? "selected" : ""}>Masquees</option></select></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend>Apparence et accessibilite</legend>
+          <div class="form-grid">
+          <label>Langue <select id="languageSetting"><option value="fr">Francais</option><option value="en" disabled>English (a venir)</option><option value="de" disabled>Deutsch (a venir)</option><option value="bo" disabled>Tibetain (a venir)</option></select></label>
+          <label>Theme <select id="themeSetting">
+            <option value="auto" ${state.settings.theme === "auto" ? "selected" : ""}>Automatique</option>
+            <option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Clair</option>
+            <option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Sombre</option>
+          </select></label>
+          <label>Taille du texte <select id="textSizeSetting">
+            <option value="small" ${state.settings.textSize === "small" ? "selected" : ""}>Compacte</option>
+            <option value="normal" ${!state.settings.textSize || state.settings.textSize === "normal" ? "selected" : ""}>Normale</option>
+            <option value="large" ${state.settings.textSize === "large" ? "selected" : ""}>Grande</option>
+            <option value="xlarge" ${state.settings.textSize === "xlarge" ? "selected" : ""}>Tres grande</option>
+          </select></label>
+          <label>Contraste renforce <select id="contrastSetting"><option value="false" ${!state.settings.highContrast ? "selected" : ""}>Desactive</option><option value="true" ${state.settings.highContrast ? "selected" : ""}>Active</option></select></label>
+          <label>Animations reduites <select id="motionSetting"><option value="false" ${!state.settings.reducedMotion ? "selected" : ""}>Selon l'appareil</option><option value="true" ${state.settings.reducedMotion ? "selected" : ""}>Toujours reduites</option></select></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend>Dates et organisation</legend>
+          <div class="form-grid">
           <label>Premier jour de la semaine <select id="firstDaySetting"><option value="monday" ${state.settings.firstDayOfWeek !== "sunday" ? "selected" : ""}>Lundi</option><option value="sunday" ${state.settings.firstDayOfWeek === "sunday" ? "selected" : ""}>Dimanche</option></select></label>
-          <label>Fuseau horaire <input value="${escapeAttr(Intl.DateTimeFormat().resolvedOptions().timeZone)}" disabled></label>
-          <label>Sauvegarde complete <button class="ghost-btn" id="exportData" type="button">Telecharger JSON</button></label>
-          <label>Restaurer une sauvegarde
+          <label>Format de date <select id="dateFormatSetting">
+            <option value="long" ${state.settings.dateFormat === "long" ? "selected" : ""}>21 juin 2026</option>
+            <option value="short" ${state.settings.dateFormat === "short" ? "selected" : ""}>21/06/2026</option>
+            <option value="iso" ${state.settings.dateFormat === "iso" ? "selected" : ""}>2026-06-21</option>
+          </select></label>
+          <label>Fuseau horaire <input id="timezoneSetting" value="${escapeAttr(state.settings.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone)}" list="timezoneSuggestions"></label>
+          <datalist id="timezoneSuggestions">
+            ${["Europe/Brussels", "Europe/Paris", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Kathmandu", "Asia/Kolkata"].map((zone) => `<option value="${zone}"></option>`).join("")}
+          </datalist>
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend>Confidentialite et synchronisation</legend>
+          <div class="form-grid">
+            <label>Synchronisation du compte <select id="cloudSyncSetting" ${currentUser ? "" : "disabled"}>
+              <option value="true" ${state.settings.cloudSyncEnabled !== false ? "selected" : ""}>Activee</option>
+              <option value="false" ${state.settings.cloudSyncEnabled === false ? "selected" : ""}>Suspendue</option>
+            </select><span class="field-help">${currentUser ? "La sauvegarde locale reste active dans les deux cas." : "Connectez-vous pour synchroniser plusieurs appareils."}</span></label>
+            <label>Rappels <button class="ghost-btn" id="openReminderSettings" type="button">Gerer les rappels</button></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group">
+          <legend>Import et export</legend>
+          <div class="settings-actions">
+            <button class="ghost-btn" id="exportData" type="button">Sauvegarde JSON</button>
             <button class="ghost-btn" id="importData" type="button">Importer JSON</button>
             <input id="importFile" type="file" accept="application/json,.json" hidden>
-          </label>
-          <label>Historique des sessions <button class="ghost-btn" id="exportSessionsCsv" type="button">Exporter CSV</button></label>
-          <label>Accumulations et mantras <button class="ghost-btn" id="exportAccumulationsCsv" type="button">Exporter CSV</button></label>
-          <label>Journal et statistiques <button class="ghost-btn" id="printReport" type="button">Imprimer / PDF</button></label>
-        </div>
-        <div class="button-row">
-          <button class="primary-btn" id="saveSettings">Enregistrer</button>
-          <button class="ghost-btn" id="resetData">Reinitialiser l'app</button>
-        </div>
+            <button class="ghost-btn" id="exportSessionsCsv" type="button">Sessions CSV</button>
+            <button class="ghost-btn" id="exportAccumulationsCsv" type="button">Accumulations CSV</button>
+            <button class="ghost-btn" id="printReport" type="button">Journal / PDF</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="settings-group danger-zone">
+          <legend>Donnees sensibles</legend>
+          <p class="small-copy">Une sauvegarde JSON est recommandee avant toute suppression.</p>
+          <div class="button-row">
+            <button class="ghost-btn danger-btn" id="resetData" type="button">Supprimer toutes mes donnees</button>
+            ${currentUser ? `<button class="ghost-btn danger-btn" id="deleteAccount" type="button">Supprimer mon compte</button>` : ""}
+          </div>
+        </fieldset>
       </div>
     </section>
   `;
-  qs("#saveSettings").addEventListener("click", () => {
-    state.settings.dailyGoal = Number(qs("#dailyGoal").value);
-    state.settings.defaultTimer = Number(qs("#defaultTimer").value);
+  qs("#saveSettings").addEventListener("click", async () => {
+    const cloudWasEnabled = state.settings.cloudSyncEnabled !== false;
+    const timerDurationChanged = Number(qs("#defaultTimer").value) !== Number(state.settings.defaultTimer);
+    const timezone = qs("#timezoneSetting").value.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!isValidTimeZone(timezone)) {
+      showToast("Le fuseau horaire indique n'est pas reconnu.");
+      return;
+    }
+    state.settings.dailyGoal = Math.max(1, Number(qs("#dailyGoal").value));
+    state.settings.defaultTimer = Math.max(1, Number(qs("#defaultTimer").value));
     state.settings.bell = qs("#bellSetting").value === "true";
+    state.settings.vibration = qs("#vibrationSetting").value === "true";
     state.settings.statsVisible = qs("#statsVisibility").value === "true";
+    state.settings.streaksVisible = qs("#streakVisibility").value === "true";
+    state.settings.language = qs("#languageSetting").value;
+    state.settings.theme = qs("#themeSetting").value;
+    state.settings.textSize = qs("#textSizeSetting").value;
+    state.settings.highContrast = qs("#contrastSetting").value === "true";
+    state.settings.reducedMotion = qs("#motionSetting").value === "true";
     state.settings.firstDayOfWeek = qs("#firstDaySetting").value;
-    clearTimerTicker();
-    timer = createTimerState(state.settings.defaultTimer, timer.label);
-    persistTimerState();
-    saveState();
+    state.settings.dateFormat = qs("#dateFormatSetting").value;
+    state.settings.timezone = timezone;
+    state.settings.cloudSyncEnabled = currentUser ? qs("#cloudSyncSetting").value === "true" : true;
+    if (timerDurationChanged && !timer.running && elapsedTimerSeconds(timer) === 0) {
+      clearTimerTicker();
+      timer = createTimerState(state.settings.defaultTimer, timer.label);
+      persistTimerState();
+    }
+    localStorage.setItem(storageKey(), JSON.stringify(state));
+    applyPreferences();
+    render();
     renderNav();
+    if (currentUser && cloudWasEnabled && state.settings.cloudSyncEnabled === false) {
+      localStorage.setItem(`${storageKey()}:dirty`, "1");
+      await syncStateNow({ bypassPreference: true });
+    } else if (currentUser && state.settings.cloudSyncEnabled !== false) {
+      localStorage.setItem(`${storageKey()}:dirty`, "1");
+      scheduleRemoteSync();
+    }
+    showToast("Reglages enregistres.");
   });
   qs("#resetData").addEventListener("click", () => {
-    if (confirm("Reinitialiser toutes les donnees de ce compte ?")) {
-      state = clone(seedState);
-      localStorage.removeItem(storageKey());
+    if (confirm("Supprimer toutes les donnees de pratique de ce compte ? Cette action est definitive apres synchronisation.")) {
+      const preservedSettings = { ...state.settings };
+      state = migrateState({ ...clone(seedState), settings: preservedSettings }, seedState);
+      localStorage.setItem(storageKey(), JSON.stringify(state));
       saveState();
       setView("dashboard");
+      showToast("Toutes les donnees de pratique ont ete supprimees.");
     }
   });
+  qs("#deleteAccount")?.addEventListener("click", openDeleteAccountDialog);
+  qs("#openReminderSettings").addEventListener("click", () => setView("reminders"));
   qs("#exportData").addEventListener("click", () => {
     downloadFile(`chemin-clair-${todayKey()}.json`, JSON.stringify(state, null, 2), "application/json");
   });
@@ -2423,6 +2644,43 @@ function renderSettings() {
   qs("#exportSessionsCsv").addEventListener("click", exportSessionsCsv);
   qs("#exportAccumulationsCsv").addEventListener("click", exportAccumulationsCsv);
   qs("#printReport").addEventListener("click", printJournalReport);
+}
+
+function openDeleteAccountDialog() {
+  openDialog("Supprimer mon compte", `
+    <div class="detail-caution">
+      Cette action supprime le compte, les sessions de connexion et les donnees synchronisees. Elle ne peut pas etre annulee.
+    </div>
+    <label>Mot de passe actuel <input id="deleteAccountPassword" type="password" autocomplete="current-password" required></label>
+    <label class="confirm-line"><input id="deleteAccountConfirm" type="checkbox"> Je comprends que cette suppression est definitive.</label>
+  `, async () => {
+    if (!qs("#deleteAccountConfirm").checked) {
+      showToast("Confirmez la suppression definitive.");
+      return false;
+    }
+    const response = await fetch("/api/account", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: qs("#deleteAccountPassword").value })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      showToast(payload.error || "Suppression du compte impossible.");
+      return false;
+    }
+    localStorage.removeItem(storageKey(currentUser.id));
+    localStorage.removeItem(revisionStorageKey());
+    currentUser = null;
+    remoteRevision = 0;
+    syncStatus = "local";
+    state = loadCachedState();
+    applyPreferences();
+    renderNav();
+    render();
+    setView("dashboard");
+    showToast("Compte et donnees synchronisees supprimes.");
+    return true;
+  });
 }
 
 function openSessionDialog(date = todayKey(), session = null) {
@@ -2513,6 +2771,9 @@ Dedication | Reposer l'esprit et dedier les bienfaits.`;
 }
 
 function openJournalDialog(entry = null) {
+  const scaleOptions = (selected) => ["non precisee", "faible", "moderee", "forte"]
+    .map((value) => `<option ${selected === value ? "selected" : ""}>${value}</option>`)
+    .join("");
   openDialog(entry ? "Modifier la note" : "Nouvelle note", `
     <label>Titre <input id="journalTitle" value="${escapeAttr(entry?.title || "Apres la pratique")}" required></label>
     <div class="form-grid">
@@ -2528,31 +2789,75 @@ function openJournalDialog(entry = null) {
         <option value="">Aucune</option>
         ${state.practices.map((practice) => `<option value="${practice.id}" ${entry?.practiceId === practice.id ? "selected" : ""}>${escapeHtml(practice.title)}</option>`).join("")}
       </select></label>
+      <label>Session associee <select id="journalSession">
+        <option value="">Aucune</option>
+        ${state.sessions.slice().sort((a, b) => String(b.date).localeCompare(String(a.date))).map((session) => `<option value="${session.id}" ${entry?.sessionId === session.id ? "selected" : ""}>${escapeHtml(session.date)} · ${escapeHtml(session.label)} · ${formatDuration(sessionDurationSeconds(session))}</option>`).join("")}
+      </select></label>
       <label>Tags, separes par des virgules <input id="journalTags" value="${escapeAttr((entry?.tags || []).join(", "))}"></label>
       <label>Qualite de presence <select id="journalPresence">
         ${["non precisee", "fragile", "variable", "stable", "claire"].map((value) => `<option ${entry?.presence === value ? "selected" : ""}>${value}</option>`).join("")}
       </select></label>
+      <label>Agitation <select id="journalAgitation">${scaleOptions(entry?.agitation || "non precisee")}</select></label>
+      <label>Torpeur <select id="journalTorpor">${scaleOptions(entry?.torpor || "non precisee")}</select></label>
+      <label>Clarte <select id="journalClarity">${scaleOptions(entry?.clarity || "non precisee")}</select></label>
+      <label>Emotion dominante <input id="journalEmotion" value="${escapeAttr(entry?.emotion || "")}" placeholder="calme, joie, tristesse..."></label>
       <label>Obstacle principal <input id="journalObstacle" value="${escapeAttr(entry?.obstacle || "")}"></label>
       <label>Element aidant <input id="journalSupport" value="${escapeAttr(entry?.support || "")}"></label>
     </div>
     <label>Note <textarea id="journalBody">${escapeHtml(entry?.body || "Ce que je remarque aujourd'hui...")}</textarea></label>
     <label>Intention pour la suite <textarea id="journalIntention">${escapeHtml(entry?.intention || "")}</textarea></label>
-  `, () => {
+    <label>Image locale facultative
+      <input id="journalImage" type="file" accept="image/png,image/jpeg,image/webp">
+      <span class="field-help">Maximum 1,5 Mo. L'image reste sur cet appareil et n'est pas envoyee vers la synchronisation.</span>
+    </label>
+    ${entry?.image?.dataUrl ? `
+      <div class="attachment-preview">
+        <img src="${escapeAttr(entry.image.dataUrl)}" alt="${escapeAttr(entry.image.alt || "Image jointe")}">
+        <label class="confirm-line"><input id="removeJournalImage" type="checkbox"> Retirer l'image actuelle</label>
+      </div>
+    ` : ""}
+  `, async () => {
+    const imageFile = qs("#journalImage").files?.[0];
+    if (imageFile && imageFile.size > 1_500_000) {
+      showToast("Cette image depasse la limite de 1,5 Mo.");
+      return false;
+    }
+    let image = qs("#removeJournalImage")?.checked ? null : entry?.image || null;
+    if (imageFile) {
+      image = {
+        name: imageFile.name,
+        type: imageFile.type,
+        size: imageFile.size,
+        alt: `Image du journal : ${qs("#journalTitle").value.trim()}`,
+        dataUrl: await readFileAsDataUrl(imageFile)
+      };
+    }
+    const tags = qs("#journalTags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
     const values = {
-      title: qs("#journalTitle").value,
+      title: qs("#journalTitle").value.trim() || "Note de pratique",
       type: qs("#journalType").value,
       date: qs("#journalDate").value,
       minutes: Number(qs("#journalMinutes").value),
       mood: qs("#journalMood").value,
       practiceId: qs("#journalPractice").value,
-      tags: qs("#journalTags").value.split(",").map((tag) => tag.trim()).filter(Boolean),
+      sessionId: qs("#journalSession").value,
+      tags,
       presence: qs("#journalPresence").value,
+      agitation: qs("#journalAgitation").value,
+      torpor: qs("#journalTorpor").value,
+      clarity: qs("#journalClarity").value,
+      emotion: qs("#journalEmotion").value.trim(),
       obstacle: qs("#journalObstacle").value.trim(),
       support: qs("#journalSupport").value.trim(),
       body: qs("#journalBody").value,
       intention: qs("#journalIntention").value.trim(),
-      favorite: entry?.favorite || false
+      favorite: entry?.favorite || false,
+      image
     };
+    tags.forEach((label) => {
+      const existing = state.journalTags.find((tag) => tag.label.toLowerCase() === label.toLowerCase());
+      if (!existing) state.journalTags.push(newRecord({ label }));
+    });
     if (entry) {
       Object.assign(entry, values);
       markUpdated(entry);
@@ -2561,6 +2866,15 @@ function openJournalDialog(entry = null) {
       state.journals.push({ id: makeId(), ...values, createdAt: now, updatedAt: now, version: 1 });
     }
     saveState();
+  });
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Lecture du fichier impossible."));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -2583,6 +2897,10 @@ function openWeeklyReviewDialog() {
       minutes: 0,
       mood: "observation",
       presence: "non precisee",
+      agitation: "non precisee",
+      torpor: "non precisee",
+      clarity: "non precisee",
+      emotion: "",
       obstacle: qs("#reviewObstacle").value.trim(),
       support: qs("#reviewSupport").value.trim(),
       intention: qs("#reviewAdjustment").value.trim(),
@@ -2781,7 +3099,9 @@ function openImportPreview(imported, counts) {
 }
 
 function openSyncConflict(payload) {
-  const cloudState = payload.data ? mergeState(seedState, payload.data) : migrateState(null, seedState);
+  const cloudState = payload.data
+    ? preserveLocalJournalImages(mergeState(seedState, payload.data))
+    : migrateState(null, seedState);
   const cloudRevision = Number(payload.revision || 0);
   openInfoDialog("Modifications sur plusieurs appareils", `
     <p>Des changements plus recents existent deja dans le nuage. Choisissez comment les reunir.</p>
@@ -2842,10 +3162,17 @@ function openDialog(title, body, onSave) {
   const cancel = qs("#practiceDialog menu .ghost-btn");
   save.hidden = false;
   cancel.textContent = "Annuler";
-  save.onclick = (event) => {
+  save.onclick = async (event) => {
     event.preventDefault();
-    onSave();
-    dialog.close();
+    save.disabled = true;
+    try {
+      const result = await onSave();
+      if (result !== false) dialog.close();
+    } catch (error) {
+      showToast(error.message || "Enregistrement impossible.");
+    } finally {
+      save.disabled = false;
+    }
   };
   dialog.showModal();
 }
@@ -3010,6 +3337,7 @@ qs("#newIntentionBtn").addEventListener("click", () => {
   });
 });
 
+applyPreferences();
 renderNav();
 setView(activeView);
 renderShellStats();
@@ -3025,6 +3353,10 @@ window.addEventListener("focus", () => {
 
 window.addEventListener("online", () => {
   if (currentUser) syncStateNow();
+});
+
+window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => {
+  if (state.settings.theme === "auto") applyPreferences();
 });
 
 async function registerServiceWorker() {
