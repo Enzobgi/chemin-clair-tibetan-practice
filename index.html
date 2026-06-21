@@ -14,14 +14,23 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <button class="menu-tab" id="menuTab" type="button" aria-label="Ouvrir le menu" aria-controls="mainSidebar" aria-expanded="false">
+      <span aria-hidden="true">☰</span>
+      <span>Menu</span>
+    </button>
+    <button class="sidebar-backdrop" id="sidebarBackdrop" type="button" aria-label="Fermer le menu" hidden></button>
+
     <div class="app-shell">
-      <aside class="sidebar" aria-label="Navigation principale">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">ཨོཾ</div>
-          <div>
-            <strong>Chemin Clair</strong>
-            <span>Pratique tibetaine</span>
+      <aside class="sidebar" id="mainSidebar" aria-label="Navigation principale">
+        <div class="sidebar-head">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">ཨོཾ</div>
+            <div>
+              <strong>Chemin Clair</strong>
+              <span>Pratique tibetaine</span>
+            </div>
           </div>
+          <button class="icon-btn sidebar-close" id="closeSidebarBtn" type="button" aria-label="Fermer le menu">×</button>
         </div>
 
         <nav class="nav-list" id="navList"></nav>
