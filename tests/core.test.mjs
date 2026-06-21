@@ -209,3 +209,14 @@ test("la navigation responsive utilise un tiroir lateral accessible", async () =
   assert.match(styles, /\.menu-tab/);
   assert.match(styles, /body\.sidebar-open \.sidebar/);
 });
+
+test("les fiches de rituel gardent une largeur lisible sur ordinateur", async () => {
+  const [script, styles] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8")
+  ]);
+  assert.match(script, /class="ritual-actions"/);
+  assert.match(script, /class="button-row ritual-management"/);
+  assert.match(styles, /\.practice-row-detailed\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
+  assert.match(styles, /\.ritual-step-preview\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+});

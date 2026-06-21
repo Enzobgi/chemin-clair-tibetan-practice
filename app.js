@@ -777,12 +777,21 @@ function metric(label, value, hint) {
 
 function practiceRow(p, detailed = false) {
   const steps = p.detailedSteps || (p.steps || []).map((title) => ({ title, instruction: "" }));
+  const practiceActions = `
+    ${detailed ? `<button class="ghost-btn" data-view-practice="${p.id}">Rituel complet</button>` : ""}
+    ${detailed ? `<button class="primary-btn" data-guide-practice="${p.id}">Mode guide</button>` : ""}
+    <button class="ghost-btn" data-start-practice="${p.id}">${p.minutes} min</button>
+    <button class="primary-btn" data-log-practice="${p.id}">Valider</button>
+  `;
   return `
     <article class="practice-row ${detailed ? "practice-row-detailed" : ""}">
-      <div>
+      <div class="${detailed ? "ritual-card-content" : ""}">
         <div class="row-head">
           <h3>${escapeHtml(p.title)}</h3>
-          <span class="tag">${escapeHtml(p.category)}</span>
+          <div class="tag-row ritual-card-meta">
+            <span class="tag">${escapeHtml(p.category)}</span>
+            ${detailed ? `<span class="tag">${p.minutes} min</span><span class="tag">${steps.length} etapes</span>` : ""}
+          </div>
         </div>
         <p>${escapeHtml(p.notes)}</p>
         ${detailed ? `
@@ -796,18 +805,17 @@ function practiceRow(p, detailed = false) {
           </ol>
         ` : `<div class="tag-row">${p.steps.map((step) => `<span class="tag">${escapeHtml(step)}</span>`).join("")}</div>`}
       </div>
-      <div class="button-row">
-        ${detailed ? `<button class="ghost-btn" data-view-practice="${p.id}">Rituel complet</button>` : ""}
-        ${detailed ? `<button class="primary-btn" data-guide-practice="${p.id}">Mode guide</button>` : ""}
-        <button class="ghost-btn" data-start-practice="${p.id}">${p.minutes} min</button>
-        <button class="primary-btn" data-log-practice="${p.id}">Valider</button>
-        ${detailed ? `
-          <button class="icon-btn" data-edit-practice="${p.id}" aria-label="Modifier ${escapeAttr(p.title)}" title="Modifier">✎</button>
-          <button class="icon-btn" data-duplicate-practice="${p.id}" aria-label="Dupliquer ${escapeAttr(p.title)}" title="Dupliquer">⧉</button>
-          <button class="icon-btn" data-archive-practice="${p.id}" aria-label="${p.archived ? "Restaurer" : "Archiver"} ${escapeAttr(p.title)}" title="${p.archived ? "Restaurer" : "Archiver"}">${p.archived ? "↥" : "⌄"}</button>
-          <button class="icon-btn danger-btn" data-delete-practice="${p.id}" aria-label="Supprimer ${escapeAttr(p.title)}" title="Supprimer">×</button>
-        ` : ""}
-      </div>
+      ${detailed ? `
+        <div class="ritual-actions">
+          <div class="button-row">${practiceActions}</div>
+          <div class="button-row ritual-management" aria-label="Gestion de ${escapeAttr(p.title)}">
+            <button class="icon-btn" data-edit-practice="${p.id}" aria-label="Modifier ${escapeAttr(p.title)}" title="Modifier">✎</button>
+            <button class="icon-btn" data-duplicate-practice="${p.id}" aria-label="Dupliquer ${escapeAttr(p.title)}" title="Dupliquer">⧉</button>
+            <button class="icon-btn" data-archive-practice="${p.id}" aria-label="${p.archived ? "Restaurer" : "Archiver"} ${escapeAttr(p.title)}" title="${p.archived ? "Restaurer" : "Archiver"}">${p.archived ? "↥" : "⌄"}</button>
+            <button class="icon-btn danger-btn" data-delete-practice="${p.id}" aria-label="Supprimer ${escapeAttr(p.title)}" title="Supprimer">×</button>
+          </div>
+        </div>
+      ` : `<div class="button-row">${practiceActions}</div>`}
     </article>
   `;
 }

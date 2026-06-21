@@ -1007,8 +1007,43 @@ menu {
 }
 
 .practice-row-detailed {
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
-  padding: 20px;
+  gap: 18px;
+  padding: 22px;
+}
+
+.ritual-card-content {
+  min-width: 0;
+}
+
+.ritual-card-content > p {
+  max-width: 78ch;
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.ritual-card-meta {
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.ritual-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.ritual-actions > .button-row:first-child {
+  flex: 1 1 auto;
+}
+
+.ritual-management {
+  flex: 0 0 auto;
 }
 
 .practice-row h3,
@@ -1023,8 +1058,8 @@ menu {
 
 .ritual-step-preview {
   display: grid;
-  gap: 10px;
-  margin: 16px 0 0;
+  gap: 12px;
+  margin: 20px 0 0;
   padding: 0;
   list-style: none;
   counter-reset: ritual-preview;
@@ -1033,16 +1068,21 @@ menu {
 .ritual-step-preview li {
   position: relative;
   display: grid;
-  gap: 3px;
-  padding-left: 38px;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  padding: 14px 14px 14px 50px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
   counter-increment: ritual-preview;
 }
 
 .ritual-step-preview li::before {
   content: counter(ritual-preview);
   position: absolute;
-  top: 0;
-  left: 0;
+  top: 14px;
+  left: 14px;
   width: 26px;
   height: 26px;
   display: grid;
@@ -1057,6 +1097,12 @@ menu {
 .ritual-step-preview span {
   color: var(--muted);
   line-height: 1.5;
+}
+
+@media (min-width: 1320px) {
+  .ritual-step-preview {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .tag-row {
@@ -1644,6 +1690,15 @@ menu {
   .settings-actions,
   .journal-observations {
     grid-template-columns: 1fr;
+  }
+
+  .ritual-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ritual-management {
+    justify-content: flex-start;
   }
 
   .section-head {
