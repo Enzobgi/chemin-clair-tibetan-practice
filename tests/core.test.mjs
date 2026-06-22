@@ -404,7 +404,7 @@ test("la PWA actualise automatiquement les fichiers du calendrier", async () => 
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../sw.js", import.meta.url), "utf8")
   ]);
-  assert.match(worker, /chemin-clair-v12/);
+  assert.match(worker, /chemin-clair-v13/);
   assert.match(worker, /"\/tibetan-calendar\.js"/);
   assert.match(worker, /NETWORK_FIRST_ASSETS\.has\(url\.pathname\)/);
   assert.match(worker, /self\.skipWaiting\(\)/);
@@ -487,6 +487,18 @@ test("l'interface distingue les dates sourcees des evenements personnels", async
   assert.match(script, /event\.builtIn \? ""/);
   assert.match(script, /id="previousTibetanYear"/);
   assert.match(worker, /tibetan-calendar\.js/);
+});
+
+test("le calendrier tibetain affiche les dates a venir par defaut et isole les jours passes", async () => {
+  const [script, styles] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../styles.css", import.meta.url), "utf8")
+  ]);
+  assert.match(script, /let tibetanCalendarPeriod = "upcoming"/);
+  assert.match(script, /String\(event\.date\) < today : String\(event\.date\) >= today/);
+  assert.match(script, /data-calendar-period="past"/);
+  assert.match(script, /Jours passes/);
+  assert.match(styles, /\.calendar-period-tabs/);
 });
 
 test("les pratiques recommandees restent compactes sur le tableau de bord", async () => {

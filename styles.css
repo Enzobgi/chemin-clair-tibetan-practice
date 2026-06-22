@@ -562,6 +562,25 @@ menu {
   text-align: center;
 }
 
+.calendar-period-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.calendar-period-tabs .ghost-btn {
+  border-color: transparent;
+}
+
+.calendar-period-tabs .ghost-btn.is-active {
+  color: #fff;
+  background: var(--maroon);
+}
+
 .calendar-sources {
   margin: 14px 0 20px;
   font-size: 0.84rem;
@@ -1836,6 +1855,12 @@ menu {
   .accumulation-stats,
   .calendar-source-toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .calendar-period-tabs {
+    display: grid;
+    grid-template-columns: 1fr;
+    width: 100%;
   }
 
   .practice-heatmap {

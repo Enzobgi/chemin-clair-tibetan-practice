@@ -325,6 +325,7 @@ let statsPractice = "all";
 let statsCategory = "all";
 let tibetanCalendarYear = new Date().getFullYear();
 let tibetanCalendarType = "all";
+let tibetanCalendarPeriod = "upcoming";
 let activeAudioUrl = null;
 let reminderInterval = null;
 
@@ -2411,6 +2412,7 @@ function ringBellTone(frequency, duration) {
 
 function renderTibetanCalendar() {
   const profile = state.settings.tibetanCalendarProfile || "personnalise";
+  const today = todayKey();
   const builtInEvents = buildTibetanCalendar(tibetanCalendarYear).filter((event) => {
     if (profile === "Bon") return event.type === "Phase lunaire";
     if (event.tradition === "Gelug") return profile === "Gelug";
@@ -2420,7 +2422,11 @@ function renderTibetanCalendar() {
   const eventTypes = [...new Set([...builtInEvents, ...personalEvents].map((event) => event.type))].sort();
   const events = [...builtInEvents, ...personalEvents]
     .filter((event) => tibetanCalendarType === "all" || event.type === tibetanCalendarType)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.name).localeCompare(String(b.name)));
+    .filter((event) => tibetanCalendarPeriod === "past" ? String(event.date) < today : String(event.date) >= today)
+    .sort((a, b) => {
+      const dateOrder = String(a.date).localeCompare(String(b.date));
+      return (tibetanCalendarPeriod === "past" ? -dateOrder : dateOrder) || String(a.name).localeCompare(String(b.name));
+    });
   qs("#tibetanCalendar").innerHTML = `
     <section class="panel">
       <div class="section-head"><div><span class="eyebrow">Calendrier optionnel</span><h2>Calendrier tibetain</h2></div><button class="primary-btn" id="addCalendarEvent">Ajouter un evenement</button></div>
@@ -2433,6 +2439,10 @@ function renderTibetanCalendar() {
           <button class="icon-btn" id="nextTibetanYear" aria-label="Annee suivante">→</button>
           <button class="ghost-btn" id="currentTibetanYear">Aujourd'hui</button>
         </div>
+      </div>
+      <div class="calendar-period-tabs" role="group" aria-label="Periode du calendrier">
+        <button class="ghost-btn ${tibetanCalendarPeriod === "upcoming" ? "is-active" : ""}" data-calendar-period="upcoming" aria-pressed="${tibetanCalendarPeriod === "upcoming"}">A venir et aujourd'hui</button>
+        <button class="ghost-btn ${tibetanCalendarPeriod === "past" ? "is-active" : ""}" data-calendar-period="past" aria-pressed="${tibetanCalendarPeriod === "past"}">Jours passes</button>
       </div>
       <p class="detail-caution">Base Phukpa avec reperes lunaires calcules. Les jours marques « date calculee » peuvent differer selon le fuseau, les jours omis ou doubles et la tradition Tsurluk. Le profil Bon affiche uniquement les phases astronomiques et vos dates personnelles.</p>
       <div class="calendar-sources">
@@ -2449,6 +2459,10 @@ function renderTibetanCalendar() {
     tibetanCalendarType = event.target.value;
     renderTibetanCalendar();
   });
+  document.querySelectorAll("[data-calendar-period]").forEach((button) => button.addEventListener("click", () => {
+    tibetanCalendarPeriod = button.dataset.calendarPeriod;
+    renderTibetanCalendar();
+  }));
   qs("#previousTibetanYear").addEventListener("click", () => {
     tibetanCalendarYear -= 1;
     renderTibetanCalendar();
@@ -2459,6 +2473,7 @@ function renderTibetanCalendar() {
   });
   qs("#currentTibetanYear").addEventListener("click", () => {
     tibetanCalendarYear = new Date().getFullYear();
+    tibetanCalendarPeriod = "upcoming";
     renderTibetanCalendar();
   });
   qs("#addCalendarEvent").addEventListener("click", () => openCalendarEventDialog());
