@@ -17,7 +17,6 @@ Application web autonome pour soutenir une pratique bouddhiste tibetaine regulie
 - Bibliotheque de guides complets
 - Retraites, accumulations, calendrier tibetain, audio et rappels
 - Calendrier tibetain Phukpa source avec phases lunaires, jours de pratique et grands Duchen
-- Chat de soutien avec Gemini, reponses rapides et mode local hors connexion
 - Analyses hebdomadaires et mensuelles des accumulations
 - Statistiques filtrables par pratique et categorie avec export CSV
 - Themes clair et sombre, contraste renforce et tailles de texte
@@ -37,8 +36,6 @@ La version publique est deployee sur Vercel. Le mode local reste disponible sans
 ## Configuration serveur
 
 Le projet utilise des fonctions Vercel et PostgreSQL. Configurez `DATABASE_URL` dans Vercel. Les tables `cc_users`, `cc_sessions` et `cc_user_state` sont creees automatiquement au premier appel.
-
-Pour activer le chat IA, ajoutez `GEMINI_API_KEY` dans les variables d'environnement Vercel. `GEMINI_MODEL` permet de choisir le modele et utilise `gemini-3.5-flash` par defaut. La cle reste exclusivement cote serveur.
 
 ## Respect des traditions
 
