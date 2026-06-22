@@ -399,6 +399,19 @@ test("le service worker exclut les API du cache", async () => {
   assert.match(worker, /caches\.match/);
 });
 
+test("la PWA actualise automatiquement les fichiers du calendrier", async () => {
+  const [script, worker] = await Promise.all([
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../sw.js", import.meta.url), "utf8")
+  ]);
+  assert.match(worker, /chemin-clair-v12/);
+  assert.match(worker, /"\/tibetan-calendar\.js"/);
+  assert.match(worker, /NETWORK_FIRST_ASSETS\.has\(url\.pathname\)/);
+  assert.match(worker, /self\.skipWaiting\(\)/);
+  assert.match(script, /await registration\.update\(\)/);
+  assert.match(script, /registration\.waiting\.postMessage/);
+});
+
 test("un conflit de synchronisation preserve la copie locale jusqu'au choix utilisateur", async () => {
   const script = await readFile(new URL("../app.js", import.meta.url), "utf8");
   assert.match(

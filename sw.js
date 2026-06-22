@@ -1,4 +1,4 @@
-const CACHE_NAME = "chemin-clair-v11";
+const CACHE_NAME = "chemin-clair-v12";
 const CORE_ASSETS = [
   "./",
   "./index.html",
@@ -10,9 +10,22 @@ const CORE_ASSETS = [
   "./assets/hero-shrine.png",
   "./assets/icon.svg"
 ];
+const NETWORK_FIRST_ASSETS = new Set([
+  "/",
+  "/index.html",
+  "/styles.css",
+  "/app.js",
+  "/core.js",
+  "/tibetan-calendar.js",
+  "/manifest.webmanifest"
+]);
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)));
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(CORE_ASSETS))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -33,15 +46,15 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
 
-  if (request.mode === "navigate") {
+  if (request.mode === "navigate" || NETWORK_FIRST_ASSETS.has(url.pathname)) {
     event.respondWith(
       fetch(request)
         .then((response) => {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+          caches.open(CACHE_NAME).then((cache) => cache.put(request.mode === "navigate" ? "./index.html" : request, copy));
           return response;
         })
-        .catch(() => caches.match("./index.html"))
+        .catch(() => caches.match(request.mode === "navigate" ? "./index.html" : request))
     );
     return;
   }

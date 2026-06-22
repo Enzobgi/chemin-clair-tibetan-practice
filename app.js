@@ -3656,13 +3656,13 @@ async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   try {
     const registration = await navigator.serviceWorker.register("./sw.js");
+    await registration.update();
+    if (registration.waiting) registration.waiting.postMessage({ type: "SKIP_WAITING" });
     registration.addEventListener("updatefound", () => {
       const worker = registration.installing;
       worker?.addEventListener("statechange", () => {
         if (worker.state === "installed" && navigator.serviceWorker.controller) {
-          showToast("Une nouvelle version est disponible.", false, "Mettre a jour", () => {
-            worker.postMessage({ type: "SKIP_WAITING" });
-          });
+          worker.postMessage({ type: "SKIP_WAITING" });
         }
       });
     });
