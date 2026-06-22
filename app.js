@@ -2416,6 +2416,7 @@ function renderTibetanCalendar() {
   const builtInEvents = buildTibetanCalendar(tibetanCalendarYear).filter((event) => {
     if (profile === "Bon") return event.type === "Phase lunaire";
     if (event.tradition === "Gelug") return profile === "Gelug";
+    if (event.tradition === "Karma Kagyu") return profile === "Karma Kagyu";
     return true;
   });
   const personalEvents = state.calendarEvents.filter((event) => String(event.date).startsWith(String(tibetanCalendarYear)));
@@ -2444,7 +2445,9 @@ function renderTibetanCalendar() {
         <button class="ghost-btn ${tibetanCalendarPeriod === "upcoming" ? "is-active" : ""}" data-calendar-period="upcoming" aria-pressed="${tibetanCalendarPeriod === "upcoming"}">A venir et aujourd'hui</button>
         <button class="ghost-btn ${tibetanCalendarPeriod === "past" ? "is-active" : ""}" data-calendar-period="past" aria-pressed="${tibetanCalendarPeriod === "past"}">Jours passes</button>
       </div>
-      <p class="detail-caution">Base Phukpa avec reperes lunaires calcules. Les jours marques « date calculee » peuvent differer selon le fuseau, les jours omis ou doubles et la tradition Tsurluk. Le profil Bon affiche uniquement les phases astronomiques et vos dates personnelles.</p>
+      <p class="detail-caution">${profile === "Karma Kagyu"
+        ? "Profil Karma Kagyu: reperes de pratique, commemorations de lignee confirmees et approximation lunaire inspiree du calendrier Tsurluk. Cette vue ne remplace pas l'almanach officiel de votre centre; les jours marques « date calculee » peuvent differer."
+        : "Base Phukpa avec reperes lunaires calcules. Les jours marques « date calculee » peuvent differer selon le fuseau, les jours omis ou doubles et la tradition Tsurluk. Le profil Bon affiche uniquement les phases astronomiques et vos dates personnelles."}</p>
       <div class="calendar-sources">
         ${Object.values(TIBETAN_CALENDAR_SOURCES).map((source) => `<a href="${escapeAttr(source.url)}" target="_blank" rel="noopener">${escapeHtml(source.name)}</a>`).join("")}
       </div>

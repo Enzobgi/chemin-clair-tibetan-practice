@@ -14,6 +14,10 @@ export const TIBETAN_CALENDAR_SOURCES = {
   losar: {
     name: "Losar - date tibetaine 2026",
     url: "https://en.wikipedia.org/wiki/Losar"
+  },
+  karmaKagyu: {
+    name: "Kagyu Office - XVIe Karmapa",
+    url: "https://kagyuoffice.org/kagyu-lineage/the-golden-rosary/16th-karmapa/"
   }
 };
 
@@ -87,12 +91,35 @@ function majorFestivals(year) {
   ];
 }
 
+function karmaKagyuDates(year) {
+  return [
+    calendarEvent(
+      "sixteenth-karmapa-birth",
+      `${year}-08-14`,
+      "Anniversaire de naissance du XVIe Karmapa",
+      "Karma Kagyu",
+      "Rangjung Rigpe Dorje, XVIe Gyalwa Karmapa, est ne le 14 aout 1924.",
+      "Prier pour la continuite de la lignee, lire une biographie ou pratiquer selon les instructions recues.",
+      { tradition: "Karma Kagyu", source: "karmaKagyu" }
+    ),
+    calendarEvent(
+      "sixteenth-karmapa-parinirvana",
+      `${year}-11-05`,
+      "Commemoration du XVIe Karmapa",
+      "Karma Kagyu",
+      "Rangjung Rigpe Dorje est entre en parinirvana le 5 novembre 1981.",
+      "Guru yoga, prieres de lignee et dedication selon votre centre ou enseignant.",
+      { tradition: "Karma Kagyu", source: "karmaKagyu" }
+    )
+  ];
+}
+
 export function buildTibetanCalendar(year) {
   const phases = [
     ...lunarPhaseDates(year, 0).map((date) => calendarEvent("new-moon", date, "Nouvelle lune", "Phase lunaire", "Repere astronomique de nouvelle lune.", "Pratique selon votre tradition.", { source: "mathematics", calculated: true, lunarDay: 30 })),
     ...lunarPhaseDates(year, 0.5).map((date) => calendarEvent("full-moon", date, "Pleine lune", "Phase lunaire", "Repere astronomique de pleine lune.", "Pratique vertueuse et dedication.", { source: "mathematics", calculated: true, lunarDay: 15 }))
   ];
-  return [...majorFestivals(year), ...practiceDays(year), ...phases]
+  return [...majorFestivals(year), ...karmaKagyuDates(year), ...practiceDays(year), ...phases]
     .filter((item) => item.date.startsWith(String(year)))
     .sort((left, right) => left.date.localeCompare(right.date) || left.name.localeCompare(right.name));
 }

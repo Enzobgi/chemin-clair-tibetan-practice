@@ -404,7 +404,7 @@ test("la PWA actualise automatiquement les fichiers du calendrier", async () => 
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../sw.js", import.meta.url), "utf8")
   ]);
-  assert.match(worker, /chemin-clair-v13/);
+  assert.match(worker, /chemin-clair-v14/);
   assert.match(worker, /"\/tibetan-calendar\.js"/);
   assert.match(worker, /NETWORK_FIRST_ASSETS\.has\(url\.pathname\)/);
   assert.match(worker, /self\.skipWaiting\(\)/);
@@ -477,6 +477,14 @@ test("le calendrier tibetain 2026 contient des dates reelles et sourcees", () =>
   assert.match(TIBETAN_CALENDAR_SOURCES.mathematics.url, /^https:/);
 });
 
+test("le profil Karma Kagyu contient des commemorations de lignee sourcees", () => {
+  const events = buildTibetanCalendar(2026).filter((event) => event.tradition === "Karma Kagyu");
+  assert.deepEqual(events.map((event) => event.date), ["2026-08-14", "2026-11-05"]);
+  assert.ok(events.every((event) => event.type === "Karma Kagyu"));
+  assert.ok(events.every((event) => event.calculated === false));
+  assert.match(TIBETAN_CALENDAR_SOURCES.karmaKagyu.url, /^https:\/\/kagyuoffice\.org/);
+});
+
 test("l'interface distingue les dates sourcees des evenements personnels", async () => {
   const [script, worker] = await Promise.all([
     readFile(new URL("../app.js", import.meta.url), "utf8"),
@@ -486,6 +494,8 @@ test("l'interface distingue les dates sourcees des evenements personnels", async
   assert.match(script, /Date calculee/);
   assert.match(script, /event\.builtIn \? ""/);
   assert.match(script, /id="previousTibetanYear"/);
+  assert.match(script, /event\.tradition === "Karma Kagyu"/);
+  assert.match(script, /approximation lunaire inspiree du calendrier Tsurluk/);
   assert.match(worker, /tibetan-calendar\.js/);
 });
 

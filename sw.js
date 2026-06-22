@@ -1,4 +1,4 @@
-const CACHE_NAME = "chemin-clair-v13";
+const CACHE_NAME = "chemin-clair-v14";
 const CORE_ASSETS = [
   "./",
   "./index.html",
