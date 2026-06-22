@@ -393,6 +393,16 @@ test("la migration version 7 rend les etapes de rituel synchronisables", () => {
   assert.equal(migrated.practices[0].detailedSteps[0].translation, "");
 });
 
+test("les pratiques conservent une configuration de mantra synchronisable", () => {
+  const migrated = migrateState({
+    sessions: [],
+    journals: [],
+    practices: [{ id: "chenrezig", title: "Chenrezig", mantraName: "Om Mani Padme Hum", mantraCount: "108" }]
+  }, defaults);
+  assert.equal(migrated.practices[0].mantraName, "Om Mani Padme Hum");
+  assert.equal(migrated.practices[0].mantraCount, 108);
+});
+
 test("le service worker exclut les API du cache", async () => {
   const worker = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(worker, /url\.pathname\.startsWith\("\/api\/"\)/);
@@ -404,7 +414,7 @@ test("la PWA actualise automatiquement les fichiers du calendrier", async () => 
     readFile(new URL("../app.js", import.meta.url), "utf8"),
     readFile(new URL("../sw.js", import.meta.url), "utf8")
   ]);
-  assert.match(worker, /chemin-clair-v14/);
+  assert.match(worker, /chemin-clair-v15/);
   assert.match(worker, /"\/tibetan-calendar\.js"/);
   assert.match(worker, /NETWORK_FIRST_ASSETS\.has\(url\.pathname\)/);
   assert.match(worker, /self\.skipWaiting\(\)/);
@@ -519,4 +529,15 @@ test("les pratiques recommandees restent compactes sur le tableau de bord", asyn
   assert.match(script, /\.map\(\(practice\) => practiceRow\(practice\)\)/);
   assert.match(script, /practice-row-compact/);
   assert.match(styles, /\.dashboard-practice-list \.practice-row-compact/);
+});
+
+test("les mantras des pratiques et routines alimentent automatiquement le compteur", async () => {
+  const script = await readFile(new URL("../app.js", import.meta.url), "utf8");
+  assert.match(script, /function recordPracticeMantra/);
+  assert.match(script, /id="practiceMantraName"/);
+  assert.match(script, /id="practiceMantraCount"/);
+  assert.match(script, /recordPracticeMantra\(p, \{ type: "practice"/);
+  assert.match(script, /recordPracticeMantra\(practice, \{ type: "routine"/);
+  assert.match(script, /elapsed >= timer\.totalSeconds \* 0\.9/);
+  assert.match(script, /completedFully/);
 });

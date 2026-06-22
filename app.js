@@ -641,6 +641,28 @@ function totalMantras() {
   return state.mantra.history.reduce((sum, item) => sum + Number(item.count || 0), 0) + Number(state.mantra.count || 0);
 }
 
+function practiceMantra(practice) {
+  const count = Math.max(0, Math.round(Number(practice?.mantraCount || 0)));
+  const name = String(practice?.mantraName || "").trim();
+  return name && count ? { name, count } : null;
+}
+
+function recordPracticeMantra(practice, source = {}) {
+  const mantra = practiceMantra(practice);
+  if (!mantra) return null;
+  const entry = newRecord({
+    date: todayKey(),
+    name: mantra.name,
+    count: mantra.count,
+    sourceType: source.type || "practice",
+    sourceId: source.id || practice.id,
+    sessionId: source.sessionId || ""
+  });
+  state.mantra.history.push(entry);
+  markUpdated(state.mantra, ["history"]);
+  return entry;
+}
+
 function setView(view) {
   activeView = view;
   document.querySelectorAll(".view").forEach((el) => el.classList.toggle("is-active", el.id === view));
@@ -790,6 +812,7 @@ function metric(label, value, hint) {
 
 function practiceRow(p, detailed = false) {
   const steps = p.detailedSteps || (p.steps || []).map((title) => ({ title, instruction: "" }));
+  const mantra = practiceMantra(p);
   const practiceActions = `
     ${detailed ? `<button class="ghost-btn" data-view-practice="${p.id}">Rituel complet</button>` : ""}
     ${detailed ? `<button class="primary-btn" data-guide-practice="${p.id}">Mode guide</button>` : ""}
@@ -804,6 +827,7 @@ function practiceRow(p, detailed = false) {
           <div class="tag-row ritual-card-meta">
             <span class="tag">${escapeHtml(p.category)}</span>
             ${detailed ? `<span class="tag">${p.minutes} min</span><span class="tag">${steps.length} etapes</span>` : ""}
+            ${mantra ? `<span class="tag">${mantra.count} × ${escapeHtml(mantra.name)}</span>` : ""}
           </div>
         </div>
         <p>${escapeHtml(p.notes)}</p>
@@ -927,7 +951,7 @@ function completeTimer() {
   }
   persistTimerState();
   const now = new Date().toISOString();
-  state.sessions.push({
+  const completedSession = {
     id: makeId(),
     date: todayKey(),
     label: timer.label,
@@ -937,7 +961,12 @@ function completeTimer() {
     createdAt: now,
     updatedAt: now,
     version: 1
-  });
+  };
+  state.sessions.push(completedSession);
+  if (timer.practiceId && elapsed >= timer.totalSeconds * 0.9) {
+    const practice = state.practices.find((item) => item.id === timer.practiceId);
+    if (practice) recordPracticeMantra(practice, { type: "timer", id: practice.id, sessionId: completedSession.id });
+  }
   saveState();
   timer = createTimerState(timer.totalSeconds / 60, timer.label);
   persistTimerState();
@@ -1245,12 +1274,18 @@ function startRoutine(routine) {
     showToast("Ajoutez au moins une etape avant de lancer cette routine.");
     return;
   }
-  const steps = routine.steps.map((step) => ({
-    ...step,
-    title: step.practiceTitle,
-    instruction: state.practices.find((practice) => practice.title === step.practiceTitle)?.notes || "Pratiquez avec attention, selon les instructions que vous avez recues.",
-    durationSeconds: Number(step.minutes || 1) * 60
-  }));
+  const steps = routine.steps.map((step) => {
+    const practice = state.practices.find((item) => item.title === step.practiceTitle);
+    return {
+      ...step,
+      title: step.practiceTitle,
+      practiceId: practice?.id || "",
+      mantraName: practice?.mantraName || "",
+      mantraCount: Number(practice?.mantraCount || 0),
+      instruction: practice?.notes || "Pratiquez avec attention, selon les instructions que vous avez recues.",
+      durationSeconds: Number(step.minutes || 1) * 60
+    };
+  });
   startFocusSession({
     type: "routine",
     sourceId: routine.id,
@@ -1291,13 +1326,15 @@ function bindPracticeButtons() {
     btn.addEventListener("click", () => {
       const p = state.practices.find((item) => item.id === btn.dataset.logPractice);
       if (!p) return;
-      state.sessions.push(newRecord({
+      const completedSession = newRecord({
         date: todayKey(),
         label: p.title,
         minutes: p.minutes,
         durationSeconds: p.minutes * 60,
         mood: p.category
-      }));
+      });
+      state.sessions.push(completedSession);
+      recordPracticeMantra(p, { type: "practice", id: p.id, sessionId: completedSession.id });
       ringBell();
       saveState();
     });
@@ -1308,6 +1345,7 @@ function bindPracticeButtons() {
       if (!p) return;
       clearTimerTicker();
       timer = createTimerState(p.minutes, p.title);
+      timer.practiceId = p.id;
       persistTimerState();
       setView("timer");
     });
@@ -1426,6 +1464,8 @@ function startGuidedRitual(practice) {
     sourceId: practice.id,
     title: practice.title,
     warning: practice.caution,
+    mantraName: practice.mantraName || "",
+    mantraCount: Number(practice.mantraCount || 0),
     steps,
     saveEachStep: false
   });
@@ -1616,17 +1656,18 @@ function finishFocusSession(save) {
       session.steps.forEach((step, index) => {
         const durationSeconds = Math.round(session.completed[index] || 0);
         if (!durationSeconds) return;
-        state.sessions.push(newRecord({
+        const completedSession = newRecord({
           date: todayKey(),
           label: step.title,
           durationSeconds,
           minutes: durationSeconds / 60,
           mood: "routine",
           routineId: session.sourceId
-        }));
+        });
+        state.sessions.push(completedSession);
       });
     }
-    state.sessions.push(newRecord({
+    const summarySession = newRecord({
       date: todayKey(),
       label: session.title,
       durationSeconds: Math.round(totalSeconds),
@@ -1635,7 +1676,20 @@ function finishFocusSession(save) {
       routineId: session.type === "routine" ? session.sourceId : null,
       practiceId: session.type === "ritual" ? session.sourceId : null,
       summaryOnly: session.saveEachStep
-    }));
+    });
+    state.sessions.push(summarySession);
+    if (session.type === "routine") {
+      session.steps.forEach((step, index) => {
+        if (Number(session.completed[index] || 0) < Number(step.durationSeconds || 0) * 0.9 || !step.practiceId) return;
+        const practice = state.practices.find((item) => item.id === step.practiceId);
+        if (practice) recordPracticeMantra(practice, { type: "routine", id: session.sourceId, sessionId: summarySession.id });
+      });
+    }
+    const completedFully = session.steps.every((step, index) => step.optional || Number(session.completed[index] || 0) >= Number(step.durationSeconds || 0) * 0.9);
+    if (session.type === "ritual" && completedFully) {
+      const practice = state.practices.find((item) => item.id === session.sourceId);
+      if (practice) recordPracticeMantra(practice, { type: "ritual", id: practice.id, sessionId: summarySession.id });
+    }
     saveState();
     ringBell();
   }
@@ -2975,7 +3029,10 @@ Dedication | 2 min | Reposer l'esprit et dedier les bienfaits. | | | | |`;
     <div class="form-grid">
       <label>Categorie <input id="practiceCategory" value="${escapeAttr(practice?.category || "Personnel")}"></label>
       <label>Duree <input id="practiceMinutes" type="number" min="1" value="${practice?.minutes || 10}"></label>
+      <label>Mantra compte <input id="practiceMantraName" value="${escapeAttr(practice?.mantraName || "")}" placeholder="Ex. Om Mani Padme Hum"></label>
+      <label>Repetitions par pratique <input id="practiceMantraCount" type="number" min="0" step="1" value="${Number(practice?.mantraCount || 0)}"></label>
     </div>
+    <p class="field-help">Si ces deux champs sont renseignes, les repetitions sont ajoutees automatiquement quand la pratique est validee ou terminee.</p>
     <label>But de la pratique <textarea id="practicePurpose">${escapeHtml(practice?.purpose || "Clarifier l'intention de cette pratique personnelle.")}</textarea></label>
     <label>Preparation <textarea id="practicePreparation">${escapeHtml(practice?.preparation || "Preparer un espace calme, regler le minuteur et adopter une posture stable.")}</textarea></label>
     <label>Etapes detaillees
@@ -3017,6 +3074,8 @@ Dedication | 2 min | Reposer l'esprit et dedier les bienfaits. | | | | |`;
       title: qs("#practiceTitle").value,
       category: qs("#practiceCategory").value,
       minutes: Number(qs("#practiceMinutes").value),
+      mantraName: qs("#practiceMantraName").value.trim(),
+      mantraCount: Math.max(0, Math.round(Number(qs("#practiceMantraCount").value || 0))),
       steps: detailedSteps.map((step) => step.title),
       detailedSteps,
       purpose: qs("#practicePurpose").value,

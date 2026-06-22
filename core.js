@@ -174,7 +174,10 @@ export function migrateState(input, defaults) {
       : [],
     practices: (Array.isArray(source.practices) ? source.practices : defaults.practices)
       .map((practice) => normalizeRecord({
+          mantraName: "",
+          mantraCount: 0,
           ...practice,
+          mantraCount: Math.max(0, Math.round(Number(practice.mantraCount || 0))),
           archived: Boolean(practice.archived),
           detailedSteps: Array.isArray(practice.detailedSteps)
             ? practice.detailedSteps.map((step) => normalizeRecord({
