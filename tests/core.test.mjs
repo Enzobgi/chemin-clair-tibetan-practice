@@ -393,6 +393,19 @@ test("la migration version 7 rend les etapes de rituel synchronisables", () => {
   assert.equal(migrated.practices[0].detailedSteps[0].translation, "");
 });
 
+test("la migration version 8 preserve l'historique du chat", () => {
+  const migrated = migrateState({
+    sessions: [],
+    journals: [],
+    practices: [],
+    chatMessages: [{ role: "assistant", content: "Je vous ecoute.", mode: "listen" }]
+  }, defaults);
+  assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
+  assert.equal(migrated.chatMessages[0].role, "assistant");
+  assert.equal(migrated.chatMessages[0].content, "Je vous ecoute.");
+  assert.ok(migrated.chatMessages[0].id);
+});
+
 test("le service worker exclut les API du cache", async () => {
   const worker = await readFile(new URL("../sw.js", import.meta.url), "utf8");
   assert.match(worker, /url\.pathname\.startsWith\("\/api\/"\)/);
@@ -474,6 +487,23 @@ test("l'interface distingue les dates sourcees des evenements personnels", async
   assert.match(script, /event\.builtIn \? ""/);
   assert.match(script, /id="previousTibetanYear"/);
   assert.match(worker, /tibetan-calendar\.js/);
+});
+
+test("le chatbot Gemini garde la cle uniquement cote serveur", async () => {
+  const [endpoint, script, html, env] = await Promise.all([
+    readFile(new URL("../api/chat.js", import.meta.url), "utf8"),
+    readFile(new URL("../app.js", import.meta.url), "utf8"),
+    readFile(new URL("../index.html", import.meta.url), "utf8"),
+    readFile(new URL("../.env.example", import.meta.url), "utf8")
+  ]);
+  assert.match(endpoint, /process\.env\.GEMINI_API_KEY/);
+  assert.match(endpoint, /generativelanguage\.googleapis\.com/);
+  assert.match(endpoint, /x-goog-api-key/);
+  assert.doesNotMatch(script, /GEMINI_API_KEY/);
+  assert.match(script, /function localChatReply/);
+  assert.match(script, /Appelez maintenant le 112/);
+  assert.match(html, /id="chat"/);
+  assert.match(env, /GEMINI_API_KEY=/);
 });
 
 test("les pratiques recommandees restent compactes sur le tableau de bord", async () => {

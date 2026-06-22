@@ -1008,6 +1008,118 @@ menu {
   margin: 4px 0 0;
 }
 
+.chat-workspace {
+  display: grid;
+  gap: 16px;
+}
+
+.chat-safety {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-left: 4px solid var(--maroon);
+  background: var(--panel-strong);
+}
+
+.chat-safety span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.chat-modes,
+.chat-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat-modes button {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-strong);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chat-modes button.is-active {
+  border-color: var(--maroon);
+  background: var(--maroon);
+  color: #fffaf0;
+}
+
+.chat-thread {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 360px;
+  max-height: 58vh;
+  padding: 16px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+}
+
+.chat-message {
+  width: min(82%, 680px);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+
+.chat-message.is-user {
+  justify-self: end;
+  border-color: #b99673;
+  background: #f4e4cf;
+}
+
+.chat-message.is-assistant {
+  justify-self: start;
+  border-color: #94b8b4;
+}
+
+.chat-message > span,
+.chat-message small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.chat-message p {
+  margin: 5px 0 0;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.chat-message.is-loading {
+  opacity: 0.75;
+}
+
+.chat-composer {
+  display: grid;
+  gap: 10px;
+}
+
+.chat-composer textarea {
+  min-height: 100px;
+}
+
+.chat-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chat-composer-actions .muted {
+  font-size: 0.8rem;
+}
+
 .field-help {
   color: var(--muted);
   font-size: 0.78rem;
@@ -1829,6 +1941,15 @@ menu {
   .event-card,
   .reminder-card {
     grid-template-columns: 1fr;
+  }
+
+  .chat-message {
+    width: 94%;
+  }
+
+  .chat-composer-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .filter-bar,

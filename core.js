@@ -1,4 +1,4 @@
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export function makeStableId(prefix = "item") {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -169,6 +169,14 @@ export function migrateState(input, defaults) {
           ...entry
         }, "journal", now))
       : [],
+    chatMessages: Array.isArray(source.chatMessages)
+      ? source.chatMessages.map((message) => normalizeRecord({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: String(message.content || ""),
+          mode: message.mode || "listen",
+          localFallback: Boolean(message.localFallback)
+        }, "chat-message", now))
+      : [],
     journalTags: Array.isArray(source.journalTags)
       ? source.journalTags.map((tag) => normalizeRecord(tag, "journal-tag", now))
       : [],
@@ -252,7 +260,7 @@ export function validateBackup(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { valid: false, errors: ["La racine doit etre un objet JSON."] };
   }
-  const arrayFields = ["sessions", "journals", "journalTags", "practices", "routines", "accumulations", "retreats", "libraryItems", "audioItems", "reminders", "calendarEvents"];
+  const arrayFields = ["sessions", "journals", "chatMessages", "journalTags", "practices", "routines", "accumulations", "retreats", "libraryItems", "audioItems", "reminders", "calendarEvents"];
   for (const field of arrayFields) {
     if (value[field] !== undefined && !Array.isArray(value[field])) {
       errors.push(`Le champ ${field} doit etre une liste.`);
@@ -418,6 +426,7 @@ export function mergeImportedState(current, imported, defaults) {
     deletedItems,
     sessions: applyTombstones(mergeById(currentNormalized.sessions, normalized.sessions), "sessions", deletedItems),
     journals: applyTombstones(mergeById(currentNormalized.journals, normalized.journals), "journals", deletedItems),
+    chatMessages: applyTombstones(mergeById(currentNormalized.chatMessages, normalized.chatMessages), "chatMessages", deletedItems),
     journalTags: applyTombstones(mergeById(currentNormalized.journalTags, normalized.journalTags), "journalTags", deletedItems),
     practices: applyNestedTombstones(
       applyTombstones(

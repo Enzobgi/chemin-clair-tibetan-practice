@@ -41,6 +41,7 @@ const navItems = [
   ["accumulations", "Accumulations", "＋"],
   ["rituals", "Rituels", "☼"],
   ["journal", "Journal", "✎"],
+  ["chat", "Chat", "◌"],
   ["calendar", "Calendrier", "▦"],
   ["tibetanCalendar", "Calendrier tibetain", "◑"],
   ["retreats", "Retraite", "◇"],
@@ -261,6 +262,7 @@ const seedState = {
   practices: defaultPractices,
   sessions: [],
   journals: [],
+  chatMessages: [],
   journalTags: [],
   deletedItems: [],
   routines: [
@@ -325,6 +327,8 @@ let statsPractice = "all";
 let statsCategory = "all";
 let tibetanCalendarYear = new Date().getFullYear();
 let tibetanCalendarType = "all";
+let chatMode = "listen";
+let chatSending = false;
 let activeAudioUrl = null;
 let reminderInterval = null;
 
@@ -1919,6 +1923,135 @@ function renderJournal() {
     renderJournal();
   });
   bindJournalActions();
+}
+
+function localChatReply(message, mode) {
+  const text = message.toLowerCase();
+  const immediateDanger = /(surdose|overdose|ne respire|respire mal|douleur thoracique|convulsion|inconscient|perte de connaissance|me suicider|suicide|me tuer|danger immediat|violence)/i.test(text);
+  if (immediateDanger) {
+    return "Cela peut etre une urgence. Appelez maintenant le 112 en Belgique ou dans l'Union europeenne, ou demandez a une personne presente de le faire. Ne restez pas seul et n'attendez pas une reponse du chat.";
+  }
+  if (mode === "urge" || /(envie forte|consommer|rechute|craquer|impulsion)/i.test(text)) {
+    return "D'abord: etes-vous en securite maintenant ? Eloignez-vous si possible de ce qui declenche l'envie. Posez les pieds au sol, expirez lentement six fois, puis buvez un verre d'eau. Donnez-vous dix minutes avant toute decision. Pouvez-vous contacter une personne de confiance et lui dire simplement: « J'ai besoin de compagnie quelques minutes » ?";
+  }
+  if (mode === "plan") {
+    return "Choisissons une seule prochaine action. Notez ce qui est le plus difficile maintenant, ce qui pourrait vous aider pendant dix minutes, puis la personne ou le lieu qui vous offre le plus de securite. Quelle petite action semble possible tout de suite ?";
+  }
+  if (mode === "practice") {
+    return "Nous pouvons clarifier votre besoin, choisir une pratique publique et simple, ou preparer une question pour votre enseignant. Pour une instruction reservee, une transmission ou une difficulte persistante, le chat ne remplace pas un enseignant qualifie. De quoi avez-vous besoin dans votre pratique aujourd'hui ?";
+  }
+  return "Je vous ecoute. Vous pouvez decrire ce qui se passe en quelques mots, sans avoir a tout expliquer. Souhaitez-vous surtout etre entendu, retrouver un peu de calme, ou choisir une prochaine action ?";
+}
+
+function chatMessageCard(message) {
+  return `
+    <article class="chat-message is-${message.role}">
+      <span>${message.role === "assistant" ? "Chemin Clair" : "Vous"}</span>
+      <p>${escapeHtml(message.content)}</p>
+      ${message.localFallback ? `<small>Reponse de soutien hors ligne</small>` : ""}
+    </article>
+  `;
+}
+
+function renderChat() {
+  const messages = state.chatMessages || [];
+  qs("#chat").innerHTML = `
+    <section class="panel chat-workspace">
+      <div class="section-head">
+        <div>
+          <span class="eyebrow">Soutien confidentiel</span>
+          <h2>Parler avec Chemin Clair</h2>
+          <p class="muted">Un espace pour traverser une envie forte, poser ce qui pese ou organiser une prochaine action.</p>
+        </div>
+        <button class="ghost-btn" id="clearChat" ${messages.length ? "" : "disabled"}>Effacer l'historique</button>
+      </div>
+      <div class="chat-safety">
+        <strong>En cas de danger immediat</strong>
+        <span>Appelez le 112 en Belgique ou dans l'Union europeenne. Ce chat ne remplace ni les urgences, ni un professionnel, ni un enseignant qualifie.</span>
+      </div>
+      <div class="chat-modes" role="group" aria-label="Mode de conversation">
+        ${[
+          ["listen", "Ecoute"],
+          ["urge", "Envie forte"],
+          ["plan", "Plan d'action"],
+          ["practice", "Pratique"]
+        ].map(([value, label]) => `<button class="${chatMode === value ? "is-active" : ""}" data-chat-mode="${value}">${label}</button>`).join("")}
+      </div>
+      <div class="chat-quick-actions">
+        <button class="chip" data-chat-prompt="J'ai une envie forte maintenant.">J'ai une envie forte</button>
+        <button class="chip" data-chat-prompt="Je me sens submerge et j'ai besoin de parler.">J'ai besoin de parler</button>
+        <button class="chip" data-chat-prompt="Aide-moi a choisir une petite action pour maintenant.">Choisir une action</button>
+        <button class="chip" data-chat-prompt="J'ai besoin de retrouver du calme dans ma pratique.">Retrouver du calme</button>
+      </div>
+      <div class="chat-thread" id="chatThread" aria-live="polite">
+        ${messages.length ? messages.map(chatMessageCard).join("") : `
+          <article class="chat-message is-assistant">
+            <span>Chemin Clair</span>
+            <p>Je suis la pour vous ecouter. Vous pouvez commencer par une phrase simple.</p>
+          </article>
+        `}
+        ${chatSending ? `<article class="chat-message is-assistant is-loading"><span>Chemin Clair</span><p>Je vous reponds...</p></article>` : ""}
+      </div>
+      <form class="chat-composer" id="chatForm">
+        <label for="chatInput">Votre message</label>
+        <textarea id="chatInput" maxlength="2000" placeholder="Ecrivez ce dont vous avez besoin maintenant..." required></textarea>
+        <div class="chat-composer-actions">
+          <span class="muted">Seuls les derniers messages utiles sont envoyes a l'IA.</span>
+          <button class="primary-btn" id="sendChat" type="submit" ${chatSending ? "disabled" : ""}>Envoyer</button>
+        </div>
+      </form>
+    </section>
+  `;
+  qs("#chatThread").scrollTop = qs("#chatThread").scrollHeight;
+  document.querySelectorAll("[data-chat-mode]").forEach((button) => button.addEventListener("click", () => {
+    chatMode = button.dataset.chatMode;
+    renderChat();
+  }));
+  document.querySelectorAll("[data-chat-prompt]").forEach((button) => button.addEventListener("click", () => {
+    qs("#chatInput").value = button.dataset.chatPrompt;
+    qs("#chatInput").focus();
+  }));
+  qs("#clearChat").addEventListener("click", () => {
+    if (!confirm("Effacer tout l'historique de cette conversation ?")) return;
+    state.chatMessages = [];
+    saveState();
+  });
+  qs("#chatForm").addEventListener("submit", submitChatMessage);
+}
+
+async function submitChatMessage(event) {
+  event.preventDefault();
+  if (chatSending) return;
+  const input = qs("#chatInput");
+  const content = input.value.trim();
+  if (!content) return;
+  state.chatMessages.push(newRecord({ role: "user", content, mode: chatMode, localFallback: false }));
+  if (state.chatMessages.length > 80) state.chatMessages = state.chatMessages.slice(-80);
+  localStorage.setItem(storageKey(), JSON.stringify(state));
+  chatSending = true;
+  renderChat();
+
+  let reply;
+  let localFallback = false;
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: chatMode,
+        messages: state.chatMessages.slice(-12).map(({ role, content: messageContent }) => ({ role, content: messageContent }))
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "chat unavailable");
+    reply = payload.message;
+  } catch {
+    reply = localChatReply(content, chatMode);
+    localFallback = true;
+  }
+  state.chatMessages.push(newRecord({ role: "assistant", content: reply, mode: chatMode, localFallback }));
+  chatSending = false;
+  saveState();
 }
 
 function journalCard(entry) {
@@ -3518,6 +3651,7 @@ function renderView() {
     accumulations: renderAccumulations,
     rituals: renderRituals,
     journal: renderJournal,
+    chat: renderChat,
     calendar: renderCalendar,
     tibetanCalendar: renderTibetanCalendar,
     retreats: renderRetreats,
