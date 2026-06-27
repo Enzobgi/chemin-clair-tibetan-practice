@@ -1,0 +1,735 @@
+name: Codex apply Chemin Clair patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/codex-apply-chemin-clair-patch.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-local-patch:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Stop if patch is already present
+        run: |
+          if grep -q 'chemin-clair-v19' sw.js && test -f account-bar.js; then
+            echo "Patch already present."
+            exit 0
+          fi
+      - name: Apply Codex patch
+        run: |
+          cat > /tmp/codex-chemin-clair.patch <<'CODEX_PATCH_END_20260627'
+diff --git a/account-bar.js b/account-bar.js
+new file mode 100644
+index 0000000..5b32d17
+--- /dev/null
++++ b/account-bar.js
+@@ -0,0 +1,58 @@
++(() => {
++  const ensureBar = () => {
++    let bar = document.getElementById("topAccountBar");
++    if (bar) return bar;
++    const main = document.querySelector("main");
++    if (!main) return null;
++    bar = document.createElement("header");
++    bar.className = "top-account-bar";
++    bar.id = "topAccountBar";
++    bar.setAttribute("aria-label", "Compte");
++    main.prepend(bar);
++    return bar;
++  };
++
++  const accountName = (panel) => panel?.querySelector("strong")?.textContent?.trim() || "Compte";
++  const accountStatus = (panel) => panel?.querySelector(".sync-line")?.textContent?.replace(/\s+/g, " ").trim() || "Compte actif";
++
++  const relayClick = (targetId) => {
++    const target = document.getElementById(targetId);
++    if (target) target.click();
++  };
++
++  const render = () => {
++    const bar = ensureBar();
++    const panel = document.getElementById("accountPanel");
++    if (!bar || !panel) return;
++    const connected = Boolean(document.getElementById("logoutBtn"));
++    if (!connected) {
++      bar.innerHTML = `
++        <div>
++          <span class="eyebrow">Compte</span>
++          <strong>Mode local</strong>
++        </div>
++        <button class="primary-btn" id="topAuthBtn" type="button">Se connecter</button>
++      `;
++      document.getElementById("topAuthBtn")?.addEventListener("click", () => relayClick("openAuthBtn"));
++      return;
++    }
++    bar.innerHTML = `
++      <div>
++        <span class="eyebrow">Compte</span>
++        <strong>${accountName(panel)}</strong>
++        <span>${accountStatus(panel)}</span>
++      </div>
++      <button class="ghost-btn danger-btn" id="topLogoutBtn" type="button">Se deconnecter</button>
++    `;
++    document.getElementById("topLogoutBtn")?.addEventListener("click", () => relayClick("logoutBtn"));
++  };
++
++  const boot = () => {
++    render();
++    const panel = document.getElementById("accountPanel");
++    if (panel) new MutationObserver(render).observe(panel, { childList: true, subtree: true });
++  };
++
++  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
++  else boot();
++})();
+diff --git a/app.js b/app.js
+index 3215b85..ad4b186 100644
+--- a/app.js
++++ b/app.js
+@@ -272,9 +272,9 @@ const seedState = {
+       time: "07:30",
+       archived: false,
+       steps: [
+-        { id: "routine-matin-1", practiceTitle: "Refuge et bodhicitta", minutes: 5, optional: false },
+-        { id: "routine-matin-2", practiceTitle: "Calme mental", minutes: 15, optional: false },
+-        { id: "routine-matin-3", practiceTitle: "Dedication", minutes: 3, optional: false }
++        { id: "routine-matin-1", practiceTitle: "Refuge et bodhicitta", title: "Refuge et bodhicitta", minutes: 5, optional: false, instruction: "Prendre refuge, generer la bodhicitta et poser clairement l'intention." },
++        { id: "routine-matin-2", practiceTitle: "Calme mental", title: "Calme mental", minutes: 15, optional: false, instruction: "Stabiliser l'attention sur le souffle, puis revenir avec douceur chaque fois que l'esprit part." },
++        { id: "routine-matin-3", practiceTitle: "Dedication", title: "Dedication", minutes: 3, optional: false, instruction: "Dedier les merites de la pratique au bien de tous les etres." }
+       ]
+     },
+     {
+@@ -285,9 +285,9 @@ const seedState = {
+       time: "21:00",
+       archived: false,
+       steps: [
+-        { id: "routine-soir-1", practiceTitle: "Calme mental", minutes: 10, optional: false },
+-        { id: "routine-soir-2", practiceTitle: "Tonglen", minutes: 8, optional: true },
+-        { id: "routine-soir-3", practiceTitle: "Dedication", minutes: 4, optional: false }
++        { id: "routine-soir-1", practiceTitle: "Calme mental", title: "Calme mental", minutes: 10, optional: false, instruction: "Revenir au souffle et laisser la journee se deposer sans forcer." },
++        { id: "routine-soir-2", practiceTitle: "Tonglen", title: "Tonglen", minutes: 8, optional: true, instruction: "Pratiquer avec prudence et douceur, en gardant une respiration naturelle." },
++        { id: "routine-soir-3", practiceTitle: "Dedication", title: "Dedication", minutes: 4, optional: false, instruction: "Conclure la journee par une dedication claire et simple." }
+       ]
+     }
+   ],
+@@ -629,6 +629,12 @@ function weekMinutes() {
+   return sumSessionSeconds(sessions) / 60;
+ }
+ 
++function formatWholeMinutes(minutes, mode = "round") {
++  const safeValue = Math.max(0, Number(minutes || 0));
++  const value = mode === "ceil" ? Math.ceil(safeValue) : Math.round(safeValue);
++  return `${value} min`;
++}
++
+ function countedSessions(sessions = state.sessions) {
+   return sessions.filter((session) => sessionDurationSeconds(session) > 0);
+ }
+@@ -692,18 +698,19 @@ function renderShellStats() {
+   const goal = Math.max(1, Number(state.settings.dailyGoal));
+   const percent = Math.min(100, Math.round((todayMinutes / goal) * 100));
+   const circumference = 327;
+-  qs("#sidebarMinutes").textContent = `${todayMinutes} min`;
++  qs("#sidebarMinutes").textContent = formatWholeMinutes(todayMinutes);
+   qs("#sidebarStreak").hidden = state.settings.streaksVisible === false;
+   qs("#sidebarStreak").textContent = `Serie: ${streak()} jours`;
+   qs("#dailyIntention").textContent = state.intentions[new Date().getDate() % state.intentions.length];
+   qs("#goalPercent").textContent = `${percent}%`;
+-  qs("#weekMinutes").textContent = weekMinutes();
++  qs("#weekMinutes").textContent = Math.round(weekMinutes());
+   qs("#totalMantras").textContent = totalMantras();
+   qs("#goalRing").style.strokeDashoffset = String(circumference - (circumference * percent) / 100);
+ }
+ 
+ function renderAccountPanel() {
+   const panel = qs("#accountPanel");
++  renderTopAccountBar();
+   if (!panel) return;
+   if (!currentUser) {
+     panel.innerHTML = `
+@@ -734,6 +741,37 @@ function renderAccountPanel() {
+   qs("#logoutBtn").addEventListener("click", logoutAccount);
+ }
+ 
++function renderTopAccountBar() {
++  const bar = qs("#topAccountBar");
++  if (!bar) return;
++  if (!currentUser) {
++    bar.innerHTML = `
++      <div>
++        <span class="eyebrow">Compte</span>
++        <strong>Mode local</strong>
++      </div>
++      <button class="primary-btn" id="topAuthBtn" type="button">Se connecter</button>
++    `;
++    qs("#topAuthBtn").addEventListener("click", () => openAuthDialog("login"));
++    return;
++  }
++  const statusCopy = {
++    synced: "Synchronise",
++    syncing: "Synchronisation...",
++    error: "Hors ligne",
++    local: state.settings.cloudSyncEnabled === false ? "Sync suspendue" : "Compte actif"
++  };
++  bar.innerHTML = `
++    <div>
++      <span class="eyebrow">Compte</span>
++      <strong>${escapeHtml(currentUser.name || currentUser.email)}</strong>
++      <span>${escapeHtml(statusCopy[syncStatus] || statusCopy.local)}</span>
++    </div>
++    <button class="ghost-btn danger-btn" id="topLogoutBtn" type="button">Se deconnecter</button>
++  `;
++  qs("#topLogoutBtn").addEventListener("click", logoutAccount);
++}
++
+ function renderDashboard() {
+   const todayMinutes = minutesFor(todayKey());
+   const todayDay = new Date().getDay();
+@@ -744,9 +782,9 @@ function renderDashboard() {
+   const activeRetreat = state.retreats.find((retreat) => !retreat.archived && retreat.startDate <= todayKey() && retreat.endDate >= todayKey());
+   qs("#dashboard").innerHTML = `
+     <div class="metrics-grid">
+-      ${metric("Aujourd'hui", `${todayMinutes} min`, `${Math.max(0, state.settings.dailyGoal - todayMinutes)} min restantes`)}
++      ${metric("Aujourd'hui", formatWholeMinutes(todayMinutes), `${formatWholeMinutes(Math.max(0, state.settings.dailyGoal - todayMinutes), "ceil")} restantes`)}
+       ${state.settings.streaksVisible === false ? "" : metric("Serie", `${streak()} jours`, "avec au moins une session")}
+-      ${metric("Semaine", `${weekMinutes()} min`, `${countedSessions().length} sessions au total`)}
++      ${metric("Semaine", formatWholeMinutes(weekMinutes()), `${countedSessions().length} sessions au total`)}
+       ${metric("Mantras", totalMantras(), `${state.mantra.selected}`)}
+     </div>
+     <div class="dashboard-actions">
+@@ -1133,7 +1171,11 @@ function routineCard(routine) {
+         ${(routine.steps || []).map((step, index) => `
+           <li>
+             <span>${index + 1}</span>
+-            <div><strong>${escapeHtml(step.practiceTitle)}</strong><small>${step.minutes} min${step.optional ? " · facultative" : ""}</small></div>
++            <div>
++              <strong>${escapeHtml(routineStepTitle(step))}</strong>
++              <small>${escapeHtml(step.practiceTitle || "Pratique libre")}${step.minutes ? ` · ${step.minutes} min` : ""}${step.optional ? " · facultative" : ""}</small>
++              ${routineStepCustomInstruction(step) ? `<p>${escapeHtml(routineStepCustomInstruction(step))}</p>` : ""}
++            </div>
+             <div class="step-actions">
+               <button class="icon-btn" data-routine-up="${routine.id}:${index}" aria-label="Monter l'etape" ${index === 0 ? "disabled" : ""}>↑</button>
+               <button class="icon-btn" data-routine-down="${routine.id}:${index}" aria-label="Descendre l'etape" ${index === routine.steps.length - 1 ? "disabled" : ""}>↓</button>
+@@ -1153,6 +1195,116 @@ function routineCard(routine) {
+   `;
+ }
+ 
++function routineStepTitle(step = {}) {
++  return String(step.title || step.practiceTitle || "Pratique libre").trim();
++}
++
++function routineStepCustomInstruction(step = {}) {
++  return String(step.instruction || step.guidance || step.text || step.notes || "").trim();
++}
++
++function routineStepEditor(step = {}, index = 0) {
++  const practiceTitle = step.practiceTitle || "Pratique libre";
++  const title = routineStepTitle(step);
++  const instruction = routineStepCustomInstruction(step);
++  return `
++    <article class="routine-step-editor" data-routine-step-editor data-step-id="${escapeAttr(step.id || "")}">
++      <div class="row-head">
++        <div>
++          <span class="eyebrow" data-routine-step-label>Etape ${index + 1}</span>
++          <h3>${escapeHtml(title)}</h3>
++        </div>
++        <button class="icon-btn danger-btn" data-remove-routine-step type="button" aria-label="Supprimer cette etape">×</button>
++      </div>
++      <div class="form-grid">
++        <label>Pratique liee
++          <input data-routine-practice list="routinePracticeOptions" value="${escapeAttr(practiceTitle)}">
++        </label>
++        <label>Titre affiche pendant la routine
++          <input data-routine-title value="${escapeAttr(title)}">
++        </label>
++        <label>Duree en minutes
++          <input data-routine-minutes type="number" min="1" max="240" value="${Number(step.minutes || 5)}">
++        </label>
++        <label class="checkbox-label">
++          <input data-routine-optional type="checkbox" ${step.optional ? "checked" : ""}>
++          Etape facultative
++        </label>
++      </div>
++      <label>Texte guide affiche pendant la routine
++        <textarea data-routine-instruction>${escapeHtml(instruction)}</textarea>
++      </label>
++    </article>
++  `;
++}
++
++function bindRoutineStepEditorControls() {
++  const list = qs("#routineStepEditors");
++  if (!list) return;
++  const updateLabels = () => {
++    list.querySelectorAll("[data-routine-step-editor]").forEach((editor, index) => {
++      const label = editor.querySelector("[data-routine-step-label]");
++      if (label) label.textContent = `Etape ${index + 1}`;
++    });
++  };
++  qs("#addRoutineStep")?.addEventListener("click", () => {
++    list.insertAdjacentHTML("beforeend", routineStepEditor({
++      practiceTitle: "Pratique libre",
++      title: "Nouvelle etape",
++      minutes: 5,
++      optional: false,
++      instruction: ""
++    }, list.querySelectorAll("[data-routine-step-editor]").length));
++    updateLabels();
++  });
++  list.addEventListener("input", (event) => {
++    const editor = event.target.closest("[data-routine-step-editor]");
++    if (!editor || !event.target.matches("[data-routine-title]")) return;
++    const heading = editor.querySelector("h3");
++    if (heading) heading.textContent = event.target.value.trim() || "Nouvelle etape";
++  });
++  list.addEventListener("click", (event) => {
++    const button = event.target.closest("[data-remove-routine-step]");
++    if (!button) return;
++    const editors = [...list.querySelectorAll("[data-routine-step-editor]")];
++    if (editors.length <= 1) {
++      showToast("Une routine doit conserver au moins une etape.");
++      return;
++    }
++    button.closest("[data-routine-step-editor]")?.remove();
++    updateLabels();
++  });
++}
++
++function collectRoutineSteps(previousSteps = []) {
++  const usedStepIds = new Set();
++  return [...document.querySelectorAll("[data-routine-step-editor]")].map((editor, index) => {
++    const practiceTitle = editor.querySelector("[data-routine-practice]")?.value.trim() || "Pratique libre";
++    const title = editor.querySelector("[data-routine-title]")?.value.trim() || practiceTitle;
++    const values = {
++      practiceTitle,
++      title,
++      minutes: Math.max(1, Number(editor.querySelector("[data-routine-minutes]")?.value || 5)),
++      optional: Boolean(editor.querySelector("[data-routine-optional]")?.checked),
++      instruction: editor.querySelector("[data-routine-instruction]")?.value.trim() || ""
++    };
++    const stepId = editor.dataset.stepId;
++    const existing = (stepId && previousSteps.find((step) => step.id === stepId))
++      || (previousSteps[index] && !usedStepIds.has(previousSteps[index].id) ? previousSteps[index] : null)
++      || previousSteps.find((step) => step.practiceTitle === values.practiceTitle && !usedStepIds.has(step.id));
++    if (!existing) return newRecord(values);
++    usedStepIds.add(existing.id);
++    const changed = existing.practiceTitle !== values.practiceTitle
++      || String(existing.title || existing.practiceTitle || "") !== values.title
++      || Number(existing.minutes || 0) !== values.minutes
++      || Boolean(existing.optional) !== values.optional
++      || routineStepCustomInstruction(existing) !== values.instruction;
++    const next = { ...existing, ...values };
++    if (changed) markUpdated(next, ["practiceTitle", "title", "minutes", "optional", "instruction"]);
++    return next;
++  });
++}
++
+ function bindRoutineActions() {
+   document.querySelectorAll("[data-start-routine]").forEach((button) => {
+     button.addEventListener("click", () => {
+@@ -1205,9 +1357,11 @@ function bindRoutineActions() {
+ }
+ 
+ function openRoutineDialog(routine = null) {
+-  const lines = routine
+-    ? routine.steps.map((step) => `${step.practiceTitle} | ${step.minutes} | ${step.optional ? "oui" : "non"}`).join("\n")
+-    : "Refuge et bodhicitta | 5 | non\nCalme mental | 15 | non\nDedication | 3 | non";
++  const draftSteps = routine?.steps?.length ? routine.steps : [
++    { practiceTitle: "Refuge et bodhicitta", title: "Refuge et bodhicitta", minutes: 5, optional: false, instruction: "Prendre refuge, generer la bodhicitta et poser clairement l'intention." },
++    { practiceTitle: "Calme mental", title: "Calme mental", minutes: 15, optional: false, instruction: "Stabiliser l'attention sur le souffle, puis revenir avec douceur chaque fois que l'esprit part." },
++    { practiceTitle: "Dedication", title: "Dedication", minutes: 3, optional: false, instruction: "Dedier les merites de la pratique au bien de tous les etres." }
++  ];
+   const days = routine?.days || [1, 2, 3, 4, 5, 6, 0];
+   openDialog(routine ? "Modifier la routine" : "Nouvelle routine", `
+     <label>Nom <input id="routineName" value="${escapeAttr(routine?.name || "Ma routine")}" required></label>
+@@ -1225,30 +1379,21 @@ function openRoutineDialog(routine = null) {
+         `).join("")}
+       </fieldset>
+     </div>
+-    <label>Etapes, une par ligne au format Pratique | minutes | facultative (oui/non)
+-      <textarea id="routineSteps">${escapeHtml(lines)}</textarea>
+-    </label>
+-    <p class="muted">Les boutons haut et bas sur la fiche permettent ensuite de reorganiser rapidement les etapes.</p>
++    <datalist id="routinePracticeOptions">
++      ${state.practices.map((practice) => `<option value="${escapeAttr(practice.title)}"></option>`).join("")}
++    </datalist>
++    <div class="routine-step-editors" id="routineStepEditors">
++      ${draftSteps.map((step, index) => routineStepEditor(step, index)).join("")}
++    </div>
++    <button class="ghost-btn" id="addRoutineStep" type="button">Ajouter une etape</button>
++    <p class="muted">Le titre et le texte guide sont ceux affiches dans la routine en cours. La pratique liee sert a retrouver les notes et le comptage automatique des mantras.</p>
+   `, () => {
+     const previousSteps = routine?.steps || [];
+-    const usedStepIds = new Set();
+-    const steps = qs("#routineSteps").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line, index) => {
+-      const [practiceTitle, minutes, optional] = line.split("|").map((part) => part.trim());
+-      const values = {
+-        practiceTitle: practiceTitle || "Pratique libre",
+-        minutes: Math.max(1, Number(minutes || 5)),
+-        optional: /^(oui|yes|true|1)$/i.test(optional || "")
+-      };
+-      const existing = previousSteps[index]?.practiceTitle === values.practiceTitle
+-        ? previousSteps[index]
+-        : previousSteps.find((step) => step.practiceTitle === values.practiceTitle && !usedStepIds.has(step.id));
+-      if (!existing) return newRecord(values);
+-      usedStepIds.add(existing.id);
+-      const changed = existing.minutes !== values.minutes || existing.optional !== values.optional;
+-      const next = { ...existing, ...values };
+-      if (changed) markUpdated(next, ["minutes", "optional"]);
+-      return next;
+-    });
++    const steps = collectRoutineSteps(previousSteps);
++    if (!steps.length) {
++      showToast("Ajoutez au moins une etape.");
++      return false;
++    }
+     const values = {
+       name: qs("#routineName").value.trim() || "Ma routine",
+       description: qs("#routineDescription").value.trim(),
+@@ -1267,6 +1412,7 @@ function openRoutineDialog(routine = null) {
+     }
+     saveState();
+   });
++  bindRoutineStepEditorControls();
+ }
+ 
+ function startRoutine(routine) {
+@@ -1276,13 +1422,16 @@ function startRoutine(routine) {
+   }
+   const steps = routine.steps.map((step) => {
+     const practice = state.practices.find((item) => item.title === step.practiceTitle);
++    const customInstruction = routineStepCustomInstruction(step);
++    const guidance = customInstruction || practice?.notes || "Pratiquez avec attention, selon les instructions que vous avez recues.";
+     return {
+       ...step,
+-      title: step.practiceTitle,
++      title: routineStepTitle(step),
+       practiceId: practice?.id || "",
+       mantraName: practice?.mantraName || "",
+       mantraCount: Number(practice?.mantraCount || 0),
+-      instruction: practice?.notes || "Pratiquez avec attention, selon les instructions que vous avez recues.",
++      guidance,
++      instruction: guidance,
+       durationSeconds: Number(step.minutes || 1) * 60
+     };
+   });
+@@ -1527,6 +1676,7 @@ function renderFocusMode() {
+   const host = qs("#focusMode");
+   const step = focusSession.steps[focusSession.index];
+   const progress = Math.round(((focusSession.index + Math.min(1, focusElapsedSeconds() / Math.max(1, step.durationSeconds))) / focusSession.steps.length) * 100);
++  const routineGuidance = focusSession.type === "routine" ? String(step.guidance || step.instruction || "").trim() : "";
+   const textViews = [
+     ["instruction", "Instructions"],
+     ["original", "Original"],
+@@ -1556,12 +1706,13 @@ function renderFocusMode() {
+     <main class="focus-content">
+       <span class="eyebrow">${focusSession.type === "routine" ? "Routine" : "Rituel guide"}</span>
+       <h1>${escapeHtml(step.title)}</h1>
++      ${focusSession.instructionsVisible && routineGuidance ? `<section class="focus-guidance" aria-label="Texte guide de l'etape" tabindex="0">${escapeHtml(routineGuidance)}</section>` : ""}
+       ${focusSession.instructionsVisible && textViews.length > 1 ? `
+         <div class="focus-text-tabs" role="tablist" aria-label="Versions du texte">
+           ${textViews.map(([key, label]) => `<button class="${activeTextView === key ? "is-active" : ""}" data-focus-text="${key}" role="tab" aria-selected="${activeTextView === key}">${label}</button>`).join("")}
+         </div>
+       ` : ""}
+-      ${focusSession.instructionsVisible && activeText ? `<p class="focus-instruction">${escapeHtml(activeText)}</p>` : ""}
++      ${focusSession.instructionsVisible && activeText && !routineGuidance ? `<p class="focus-instruction">${escapeHtml(activeText)}</p>` : ""}
+       ${step.optional ? `<span class="tag">Etape facultative</span>` : ""}
+       ${focusSession.warning ? `<p class="focus-warning">${escapeHtml(focusSession.warning)}</p>` : ""}
+       <div class="focus-clock" id="focusClock">${formatTime(Math.max(0, step.durationSeconds - focusElapsedSeconds()))}</div>
+diff --git a/core.js b/core.js
+index 88164cf..058c434 100644
+--- a/core.js
++++ b/core.js
+@@ -210,7 +210,11 @@ export function migrateState(input, defaults) {
+           archived: Boolean(routine.archived),
+           days: Array.isArray(routine.days) ? routine.days : [],
+           steps: Array.isArray(routine.steps)
+-            ? routine.steps.map((step) => normalizeRecord(step, "routine-step", now))
++            ? routine.steps.map((step) => normalizeRecord({
++                ...step,
++                title: step.title || step.practiceTitle || "Pratique libre",
++                instruction: step.instruction || step.guidance || step.text || step.notes || ""
++              }, "routine-step", now))
+             : []
+         }, "routine", now)),
+     retreats: Array.isArray(source.retreats)
+diff --git a/index.html b/index.html
+index 6bfc648..babb500 100644
+--- a/index.html
++++ b/index.html
+@@ -50,6 +50,8 @@
+       </aside>
+ 
+       <main>
++        <header class="top-account-bar" id="topAccountBar" aria-label="Compte"></header>
++
+         <section class="hero">
+           <img src="./assets/hero-shrine.png" alt="Terrasse de meditation himalayenne au lever du jour" />
+           <div class="hero-content">
+@@ -165,5 +167,6 @@
+     <section class="focus-mode" id="focusMode" hidden aria-live="polite"></section>
+ 
+     <script type="module" src="./app.js"></script>
++    <script src="./account-bar.js" defer></script>
+   </body>
+ </html>
+diff --git a/styles.css b/styles.css
+index f9cf934..276cc9f 100644
+--- a/styles.css
++++ b/styles.css
+@@ -308,6 +308,29 @@ main {
+   padding: 22px;
+ }
+ 
++.top-account-bar {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  gap: 12px;
++  margin-bottom: 14px;
++}
++
++.top-account-bar > div {
++  display: grid;
++  justify-items: end;
++  gap: 2px;
++  min-width: 0;
++}
++
++.top-account-bar strong,
++.top-account-bar span {
++  max-width: min(42vw, 360px);
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
+ .hero {
+   position: relative;
+   min-height: 360px;
+@@ -677,11 +700,49 @@ menu {
+   color: var(--muted);
+ }
+ 
++.routine-steps p {
++  margin-top: 5px;
++  color: var(--muted);
++  font-size: 0.92rem;
++  white-space: pre-line;
++}
++
+ .step-actions {
+   display: flex;
+   gap: 4px;
+ }
+ 
++.routine-step-editors {
++  display: grid;
++  gap: 12px;
++}
++
++.routine-step-editor {
++  display: grid;
++  gap: 12px;
++  padding: 14px;
++  border: 1px solid var(--line);
++  border-radius: var(--radius);
++  background: #fffaf1;
++}
++
++.routine-step-editor h3 {
++  margin: 4px 0 0;
++  font-size: 1.05rem;
++}
++
++.checkbox-label {
++  align-content: end;
++  grid-template-columns: auto 1fr;
++  gap: 8px;
++  color: var(--ink);
++}
++
++.checkbox-label input {
++  width: auto;
++  align-self: center;
++}
++
+ .step-actions .icon-btn {
+   width: 34px;
+   min-height: 34px;
+@@ -935,6 +996,30 @@ menu {
+   margin: 0 auto;
+   font-size: calc(1.25rem * var(--focus-font-scale));
+   line-height: 1.75;
++  white-space: pre-line;
++}
++
++.focus-guidance {
++  max-width: 72ch;
++  max-height: min(38vh, 360px);
++  margin: 0 auto;
++  padding: 16px 18px;
++  border: 1px solid var(--line);
++  border-radius: var(--radius);
++  background: rgba(255, 250, 241, 0.78);
++  font-size: calc(1.18rem * var(--focus-font-scale));
++  line-height: 1.75;
++  overflow-y: auto;
++  overscroll-behavior: contain;
++  scrollbar-gutter: stable;
++  text-align: left;
++  -webkit-overflow-scrolling: touch;
++  white-space: pre-line;
++}
++
++.focus-mode.is-dim .focus-guidance {
++  border-color: #524a41;
++  background: rgba(40, 35, 31, 0.92);
+ }
+ 
+ .focus-text-tabs {
+@@ -1778,6 +1863,20 @@ menu {
+     padding: 12px 12px 12px 18px;
+   }
+ 
++  .top-account-bar {
++    justify-content: space-between;
++    margin-left: 32px;
++  }
++
++  .top-account-bar > div {
++    justify-items: start;
++  }
++
++  .top-account-bar strong,
++  .top-account-bar span {
++    max-width: 45vw;
++  }
++
+   .hero {
+     min-height: 470px;
+   }
+@@ -1887,6 +1986,12 @@ menu {
+     font-size: calc(1.05rem * var(--focus-font-scale));
+   }
+ 
++  .focus-guidance {
++    max-height: 30vh;
++    padding: 13px 14px;
++    font-size: calc(1.02rem * var(--focus-font-scale));
++  }
++
+   .focus-controls {
+     padding: 12px;
+   }
+diff --git a/sw.js b/sw.js
+index abd1445..fa21bbb 100644
+--- a/sw.js
++++ b/sw.js
+@@ -1,9 +1,10 @@
+-const CACHE_NAME = "chemin-clair-v15";
++const CACHE_NAME = "chemin-clair-v19";
+ const CORE_ASSETS = [
+   "./",
+   "./index.html",
+   "./styles.css",
+   "./app.js",
++  "./account-bar.js",
+   "./core.js",
+   "./tibetan-calendar.js",
+   "./manifest.webmanifest",
+@@ -15,6 +16,7 @@ const NETWORK_FIRST_ASSETS = new Set([
+   "/index.html",
+   "/styles.css",
+   "/app.js",
++  "/account-bar.js",
+   "/core.js",
+   "/tibetan-calendar.js",
+   "/manifest.webmanifest"
+diff --git a/tests/core.test.mjs b/tests/core.test.mjs
+index 784f854..fbf8411 100644
+--- a/tests/core.test.mjs
++++ b/tests/core.test.mjs
+@@ -329,6 +329,8 @@ test("la migration intermediaire normalise routines, accumulations et journal",
+   assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
+   assert.equal(migrated.routines.length, 1);
+   assert.ok(migrated.routines[0].steps[0].id);
++  assert.equal(migrated.routines[0].steps[0].title, "Calme");
++  assert.equal(migrated.routines[0].steps[0].instruction, "");
+   assert.ok(migrated.accumulations[0].entries[0].id);
+   assert.equal(migrated.journals[0].type, "quick");
+ });
+@@ -414,7 +416,8 @@ test("la PWA actualise automatiquement les fichiers du calendrier", async () =>
+     readFile(new URL("../app.js", import.meta.url), "utf8"),
+     readFile(new URL("../sw.js", import.meta.url), "utf8")
+   ]);
+-  assert.match(worker, /chemin-clair-v15/);
++  assert.match(worker, /chemin-clair-v19/);
++  assert.match(worker, /account-bar\.js/);
+   assert.match(worker, /"\/tibetan-calendar\.js"/);
+   assert.match(worker, /NETWORK_FIRST_ASSETS\.has\(url\.pathname\)/);
+   assert.match(worker, /self\.skipWaiting\(\)/);
+@@ -531,6 +534,42 @@ test("les pratiques recommandees restent compactes sur le tableau de bord", asyn
+   assert.match(styles, /\.dashboard-practice-list \.practice-row-compact/);
+ });
+ 
++test("les routines ont un texte d'etape personnalisable et le tableau de bord arrondit les minutes", async () => {
++  const [script, styles] = await Promise.all([
++    readFile(new URL("../app.js", import.meta.url), "utf8"),
++    readFile(new URL("../styles.css", import.meta.url), "utf8")
++  ]);
++  assert.match(script, /data-routine-step-editor/);
++  assert.match(script, /data-routine-instruction/);
++  assert.match(script, /function collectRoutineSteps/);
++  assert.match(script, /title: routineStepTitle\(step\)/);
++  assert.match(script, /const guidance = customInstruction \|\| practice\?\.notes/);
++  assert.match(script, /routineGuidance/);
++  assert.match(script, /focus-guidance/);
++  assert.match(styles, /\.routine-step-editor/);
++  assert.match(styles, /\.focus-guidance\s*\{[^}]*white-space:\s*pre-line/s);
++  assert.match(styles, /\.focus-guidance\s*\{[^}]*overflow-y:\s*auto/s);
++  assert.match(styles, /\.focus-guidance\s*\{[^}]*max-height:/s);
++  assert.match(styles, /\.focus-instruction\s*\{[^}]*white-space:\s*pre-line/s);
++  assert.match(script, /function formatWholeMinutes/);
++  assert.match(script, /metric\("Aujourd'hui", formatWholeMinutes\(todayMinutes\)/);
++  assert.match(script, /metric\("Semaine", formatWholeMinutes\(weekMinutes\(\)\)/);
++});
++
++test("le compte reste accessible depuis un bouton clair en haut de l'application", async () => {
++  const [markup, script, styles] = await Promise.all([
++    readFile(new URL("../index.html", import.meta.url), "utf8"),
++    readFile(new URL("../app.js", import.meta.url), "utf8"),
++    readFile(new URL("../styles.css", import.meta.url), "utf8")
++  ]);
++  assert.match(markup, /id="topAccountBar"/);
++  assert.match(markup, /account-bar\.js/);
++  assert.match(script, /function renderTopAccountBar/);
++  assert.match(script, /id="topAuthBtn"/);
++  assert.match(script, /id="topLogoutBtn"/);
++  assert.match(styles, /\.top-account-bar/);
++});
++
+ test("les mantras des pratiques et routines alimentent automatiquement le compteur", async () => {
+   const script = await readFile(new URL("../app.js", import.meta.url), "utf8");
+   assert.match(script, /function recordPracticeMantra/);
+CODEX_PATCH_END_20260627
+          git apply /tmp/codex-chemin-clair.patch
+      - name: Validate
+        run: npm test
+      - name: Commit and push application update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add account-bar.js app.js core.js index.html styles.css sw.js tests/core.test.mjs
+          git commit -m "Improve account access and routine guidance scrolling"
+          git push
